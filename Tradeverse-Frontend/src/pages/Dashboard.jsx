@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   LogOut,
@@ -8,7 +8,7 @@ import {
   Settings,
   Zap,
 } from "lucide-react";
-import axios from "axios"; // Added Axios to talk to Python!
+import axios from "axios";
 import TradingChart from "../components/TradingChart";
 
 export default function Dashboard() {
@@ -25,13 +25,67 @@ export default function Dashboard() {
     "> Secure JWT Token verified.",
     "> Awaiting algorithm execution command...",
   ]);
+  const [activeSymbol, setActiveSymbol] = useState("TSLA");
+  const [searchInput, setSearchInput] = useState("");
+
+  // --- WALLET & TRADING STATE ---
+  const [balance, setBalance] = useState(null);
+  const [portfolio, setPortfolio] = useState([]);
+  const [tradeQuantity, setTradeQuantity] = useState(1);
+  const [livePrice, setLivePrice] = useState(null);
+
+  // --- FETCH BALANCE ON LOAD ---
+  useEffect(() => {
+    const fetchWalletBalance = async () => {
+      try {
+        const token = localStorage.getItem("tradeverse_token");
+        const response = await axios.get(
+          "http://localhost:8000/api/v1/users/balance",
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        setBalance(response.data.walletBalance);
+        setPortfolio(response.data.portfolio);
+      } catch (error) {
+        console.error("Failed to fetch balance:", error);
+        setBalance(0);
+      }
+    };
+
+    fetchWalletBalance();
+  }, []);
+
+  // --- FETCH LIVE PRICE WHEN SYMBOL CHANGES ---
+  useEffect(() => {
+    const fetchLivePrice = async () => {
+      try {
+        setLivePrice(null); // Reset to "Fetching..." state
+        const token = localStorage.getItem("tradeverse_token");
+        const response = await axios.get(
+          `http://localhost:8000/api/v1/trades/price/${activeSymbol}`,
+          {
+            headers: { Authorization: `Bearer ${token}` },
+          },
+        );
+        setLivePrice(response.data.price);
+      } catch (error) {
+        console.error("Failed to fetch live price", error);
+        setLivePrice("ERROR"); // <-- NEW: Safely catch the backend crash!
+      }
+    };
+
+    if (activeSymbol) {
+      fetchLivePrice();
+    }
+  }, [activeSymbol]);
 
   const handleLogout = () => {
     localStorage.removeItem("tradeverse_token");
     navigate("/");
   };
 
-  // --- THE NEW DYNAMIC EXECUTION FUNCTION ---
+  // --- THE DYNAMIC EXECUTION FUNCTION ---
   const handleRunAlgorithm = async () => {
     setLogs((prev) => [...prev, `> Initiating sequence for TSLA...`]);
     setLogs((prev) => [
@@ -41,7 +95,7 @@ export default function Dashboard() {
 
     try {
       const response = await axios.post("http://localhost:8001/api/predict", {
-        symbol: "TSLA",
+        symbol: activeSymbol,
         weights: {
           sentiment: sentimentWeight,
           rsi: rsiWeight,
@@ -63,14 +117,122 @@ export default function Dashboard() {
     }
   };
 
+  // --- THE SECURE BROKER (EXECUTE BUY) ---
+  const handleBuyStock = async () => {
+    try {
+      setLogs((prev) => [
+        ...prev,
+        `> Executing BUY order for ${tradeQuantity} shares of ${activeSymbol}...`,
+      ]);
+      const token = localStorage.getItem("tradeverse_token");
+
+      const response = await axios.post(
+        "http://localhost:8000/api/v1/trades/buy",
+        {
+          symbol: activeSymbol,
+          quantity: tradeQuantity,
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      setBalance(response.data.newBalance);
+      setLogs((prev) => [...prev, `> SUCCESS: ${response.data.message}`]);
+
+      const refresh = await axios.get(
+        "http://localhost:8000/api/v1/users/balance",
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      setPortfolio(refresh.data.portfolio);
+    } catch (error) {
+      setLogs((prev) => [
+        ...prev,
+        `> ORDER REJECTED: ${error.response?.data?.error || "Network error."}`,
+      ]);
+      console.error(error);
+    }
+  };
+
+  // --- THE SECURE BROKER (EXECUTE SELL) ---
+  const handleSellStock = async () => {
+    try {
+      setLogs((prev) => [
+        ...prev,
+        `> Executing SELL order for ${tradeQuantity} shares of ${activeSymbol}...`,
+      ]);
+      const token = localStorage.getItem("tradeverse_token");
+
+      const response = await axios.post(
+        "http://localhost:8000/api/v1/trades/sell",
+        {
+          symbol: activeSymbol,
+          quantity: tradeQuantity,
+        },
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+
+      setLogs((prev) => [...prev, `> SUCCESS: ${response.data.message}`]);
+
+      const refresh = await axios.get(
+        "http://localhost:8000/api/v1/users/balance",
+        {
+          headers: { Authorization: `Bearer ${token}` },
+        },
+      );
+      setBalance(refresh.data.walletBalance);
+      setPortfolio(refresh.data.portfolio);
+    } catch (error) {
+      setLogs((prev) => [
+        ...prev,
+        `> ORDER REJECTED: ${error.response?.data?.error || "Network error."}`,
+      ]);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col">
-      {/* --- TOP NAVIGATION BAR --- */}
       <nav className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
         <div className="flex items-center gap-2">
           <TrendingUp className="h-6 w-6 text-green-500" />
           <h1 className="text-xl font-bold text-gray-800">Tradeverse AI</h1>
         </div>
+
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (searchInput) setActiveSymbol(searchInput.toUpperCase());
+          }}
+          className="flex gap-2"
+        >
+          <input
+            type="text"
+            placeholder="Search Ticker (e.g. AAPL)"
+            className="border border-gray-300 rounded-md px-4 py-1 text-sm focus:outline-none focus:border-blue-500 uppercase"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+          />
+          <button
+            type="submit"
+            className="bg-blue-600 text-white px-4 py-1 rounded-md text-sm font-bold hover:bg-blue-700"
+          >
+            Load Data
+          </button>
+        </form>
+
+        <div className="hidden md:flex items-center gap-3 bg-green-50 px-4 py-2 rounded-lg border border-green-200 shadow-sm ml-4">
+          <span className="text-sm font-semibold text-green-700 uppercase tracking-wider">
+            Buying Power
+          </span>
+          <span className="font-bold text-lg text-green-800">
+            {balance !== null ? `$${balance.toLocaleString()}` : "Loading..."}
+          </span>
+        </div>
+
         <button
           onClick={handleLogout}
           className="flex items-center gap-2 text-sm font-medium text-gray-600 hover:text-red-500 transition-colors"
@@ -79,16 +241,16 @@ export default function Dashboard() {
         </button>
       </nav>
 
-      {/* --- MAIN DASHBOARD CONTENT --- */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-        {/* Top Stats Row */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
             <div className="flex items-center gap-3 text-gray-500 mb-2">
               <Activity className="h-5 w-5 text-blue-500" />
               <h2 className="font-semibold">Live Market Status</h2>
             </div>
-            <p className="text-2xl font-bold text-gray-800">Tracking TSLA...</p>
+            <p className="text-2xl font-bold text-gray-800">
+              Tracking {activeSymbol}...
+            </p>
           </div>
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm">
             <div className="flex items-center gap-3 text-gray-500 mb-2">
@@ -108,9 +270,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* --- INTERACTIVE CONTROL PANEL --- */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-          {/* Left Side: The Sliders */}
           <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm col-span-1">
             <div className="flex items-center gap-2 mb-6 border-b pb-4">
               <Settings className="h-5 w-5 text-gray-700" />
@@ -192,38 +352,135 @@ export default function Dashboard() {
             </button>
           </div>
 
-          {/* Right Side: THE DYNAMIC Execution Log */}
-          <div className="bg-gray-900 p-6 rounded-xl shadow-inner col-span-1 lg:col-span-2 flex flex-col">
-            <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-4">
-              <Server className="h-5 w-5 text-gray-400" />
-              <h2 className="text-lg font-bold text-gray-100">
-                Live Execution Log
-              </h2>
-            </div>
-
-            {/* THE NEW DYNAMIC CODE IS RIGHT HERE */}
-            <div className="flex-1 font-mono text-sm text-green-400 overflow-y-auto space-y-2">
-              {logs.map((log, index) => (
-                <p
-                  key={index}
-                  className={
-                    log.includes("ERROR")
-                      ? "text-red-400"
-                      : log.includes("SIGNAL")
-                        ? "text-yellow-400 font-bold"
-                        : ""
-                  }
-                >
-                  {log}
-                </p>
-              ))}
-            </div>
+          <div className="bg-white p-6 rounded-xl border border-gray-100 shadow-sm col-span-1 lg:col-span-2">
+            <h2 className="font-bold text-xl text-gray-800 mb-4">
+              My Holdings
+            </h2>
+            {portfolio.length === 0 ? (
+              <p className="text-gray-500 italic">
+                Your vault is empty. Execute a trade to begin.
+              </p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-gray-200 text-gray-500 text-sm">
+                      <th className="pb-2">Asset</th>
+                      <th className="pb-2">Shares</th>
+                      <th className="pb-2">Avg Buy Price</th>
+                      <th className="pb-2">Total Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portfolio.map((stock, index) => (
+                      <tr
+                        key={index}
+                        className="border-b border-gray-50 hover:bg-gray-50"
+                      >
+                        <td className="py-3 font-bold text-blue-600">
+                          {stock.symbol}
+                        </td>
+                        <td className="py-3 font-semibold">{stock.shares}</td>
+                        <td className="py-3 text-gray-600">
+                          ${stock.buyPrice?.toFixed(2) || "150.00"}
+                        </td>
+                        <td className="py-3 font-bold text-green-600">
+                          $
+                          {(
+                            stock.shares * (stock.buyPrice || 150)
+                          ).toLocaleString(undefined, {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* --- THE TRADINGVIEW CHART BOX --- */}
-        <div className="bg-white p-2 rounded-xl border border-gray-100 shadow-sm h-[500px] w-full overflow-hidden">
-          <TradingChart />
+        <div className="bg-gray-900 p-6 rounded-xl shadow-inner mb-6 flex flex-col h-64">
+          <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-4">
+            <Server className="h-5 w-5 text-gray-400" />
+            <h2 className="text-lg font-bold text-gray-100">
+              Live Execution Log
+            </h2>
+          </div>
+
+          <div className="flex-1 font-mono text-sm text-green-400 overflow-y-auto space-y-2">
+            {logs.map((log, index) => (
+              <p
+                key={index}
+                className={
+                  log.includes("ERROR")
+                    ? "text-red-400"
+                    : log.includes("SIGNAL")
+                      ? "text-yellow-400 font-bold"
+                      : ""
+                }
+              >
+                {log}
+              </p>
+            ))}
+          </div>
+        </div>
+
+        <div className="bg-white p-4 rounded-xl border border-gray-100 shadow-sm flex flex-col gap-4 h-[600px] w-full">
+          <div className="flex-1 overflow-hidden rounded-lg border border-gray-200">
+            <TradingChart symbol={activeSymbol} />
+          </div>
+
+          <div className="flex items-center justify-between bg-gray-50 p-4 rounded-lg border border-gray-200">
+            <div className="flex flex-col">
+              <span className="text-sm font-bold text-gray-500 uppercase">
+                Live Price
+              </span>
+              <span className="text-2xl font-black text-gray-800">
+                {/* NEW: Safely display errors without crashing! */}
+                {livePrice === "ERROR" ? (
+                  <span className="text-red-500">API Error</span>
+                ) : livePrice !== null ? (
+                  `$${Number(livePrice).toFixed(2)}`
+                ) : (
+                  "Fetching..."
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <label className="font-bold text-gray-700">Shares:</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={tradeQuantity}
+                  onChange={(e) => setTradeQuantity(e.target.value)}
+                  className="border border-gray-300 rounded-md px-3 py-2 w-24 text-center text-lg font-semibold focus:outline-none focus:border-blue-500"
+                />
+              </div>
+
+              <div className="flex gap-2">
+                {/* NEW: Disable buttons if the API crashes! */}
+                <button
+                  onClick={handleSellStock}
+                  disabled={livePrice === null || livePrice === "ERROR"}
+                  className="bg-red-500 text-white px-6 py-2 rounded-lg font-bold hover:bg-red-600 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  SELL
+                </button>
+                <button
+                  onClick={handleBuyStock}
+                  disabled={livePrice === null || livePrice === "ERROR"}
+                  className="bg-green-600 text-white px-8 py-2 rounded-lg font-bold text-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  🛒 BUY {activeSymbol}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       </main>
     </div>

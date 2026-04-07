@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock, Mail, AlertCircle } from "lucide-react";
+import { Link } from "react-router-dom";
 import axios from "axios"; // The bridge to the backend!
 
 export default function Login() {
@@ -103,6 +104,16 @@ export default function Login() {
             Enter Platform
           </button>
         </form>
+        {/* Paste this right below your </form> tag in Login.jsx! */}
+        <p className="text-center text-sm text-gray-500 mt-6">
+          Don't have an account?{" "}
+          <Link
+            to="/register"
+            className="text-blue-600 font-semibold hover:underline"
+          >
+            Create one
+          </Link>
+        </p>
       </div>
     </div>
   );
