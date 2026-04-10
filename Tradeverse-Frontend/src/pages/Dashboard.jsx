@@ -85,15 +85,19 @@ export default function Dashboard() {
     navigate("/");
   };
 
-  // --- THE DYNAMIC EXECUTION FUNCTION ---
+  // --- THE DYNAMIC EXECUTION FUNCTION (Now Autonomous!) ---
   const handleRunAlgorithm = async () => {
-    setLogs((prev) => [...prev, `> Initiating sequence for TSLA...`]);
+    setLogs((prev) => [
+      ...prev,
+      `> Initiating sequence for ${activeSymbol}...`,
+    ]);
     setLogs((prev) => [
       ...prev,
       `> Weights: Sentiment(${sentimentWeight}), RSI(${rsiWeight}), MA(${maWeight})`,
     ]);
 
     try {
+      // 1. Ask Python for the Brain's decision
       const response = await axios.post("http://localhost:8001/api/predict", {
         symbol: activeSymbol,
         weights: {
@@ -103,7 +107,8 @@ export default function Dashboard() {
         },
       });
 
-      const signal = response.data.signal;
+      // Grabs the exact signal from your algo_engine.py (e.g., "🟢 BUY")
+      const signal = response.data.signal.toUpperCase();
       const confidence = response.data.confidence;
 
       setLogs((prev) => [...prev, `> AI Analysis Complete.`]);
@@ -111,6 +116,26 @@ export default function Dashboard() {
         ...prev,
         `> SIGNAL: ${signal} (Confidence: ${confidence}%)`,
       ]);
+
+      // 2. THE AUTONOMOUS BOT TRIGGER
+      if (signal.includes("BUY")) {
+        setLogs((prev) => [
+          ...prev,
+          `> 🤖 BOT OVERRIDE: Automatically executing BUY order...`,
+        ]);
+        await handleBuyStock(); // The bot pulls the trigger!
+      } else if (signal.includes("SELL")) {
+        setLogs((prev) => [
+          ...prev,
+          `> 🤖 BOT OVERRIDE: Automatically executing SELL order...`,
+        ]);
+        await handleSellStock(); // The bot pulls the trigger!
+      } else {
+        setLogs((prev) => [
+          ...prev,
+          `> 🤖 BOT STANDING BY: No favorable trade setup found.`,
+        ]);
+      }
     } catch (error) {
       setLogs((prev) => [...prev, `> ERROR: Connection to AI Engine failed.`]);
       console.error(error);
@@ -387,7 +412,8 @@ export default function Dashboard() {
                         <td className="py-3 font-bold text-green-600">
                           $
                           {(
-                            stock.shares * (stock.buyPrice || 150)
+                            Number(stock.shares) *
+                            (Number(stock.buyPrice) || livePrice || 0)
                           ).toLocaleString(undefined, {
                             minimumFractionDigits: 2,
                             maximumFractionDigits: 2,
