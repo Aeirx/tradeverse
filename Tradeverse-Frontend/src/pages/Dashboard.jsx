@@ -7,9 +7,27 @@ import {
   Server,
   Settings,
   Zap,
+  Menu,
+  X,
+  Search,
 } from "lucide-react";
 import axios from "axios";
 import TradingChart from "../components/TradingChart";
+
+const POPULAR_STOCKS = [
+  { symbol: "AAPL", name: "Apple Inc." },
+  { symbol: "MSFT", name: "Microsoft Corp." },
+  { symbol: "TSLA", name: "Tesla Inc." },
+  { symbol: "NVDA", name: "NVIDIA Corp." },
+  { symbol: "AMZN", name: "Amazon.com Inc." },
+  { symbol: "META", name: "Meta Platforms" },
+  { symbol: "GOOGL", name: "Alphabet Inc." },
+  { symbol: "NFLX", name: "Netflix Inc." },
+  { symbol: "AMD", name: "Advanced Micro Devices" },
+  { symbol: "INTC", name: "Intel Corp." },
+  { symbol: "COIN", name: "Coinbase Global" },
+  { symbol: "SPY", name: "S&P 500 ETF Trust" },
+];
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -27,6 +45,7 @@ export default function Dashboard() {
   ]);
   const [activeSymbol, setActiveSymbol] = useState("TSLA");
   const [searchInput, setSearchInput] = useState("");
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   // --- WALLET & TRADING STATE ---
   const [balance, setBalance] = useState(null);
@@ -220,34 +239,96 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <nav className="bg-white border-b border-gray-200 px-6 py-4 flex justify-between items-center">
-        <div className="flex items-center gap-2">
-          <TrendingUp className="h-6 w-6 text-green-500" />
-          <h1 className="text-xl font-bold text-gray-800">Tradeverse AI</h1>
+    <div className="min-h-screen bg-gray-50 flex flex-col relative overflow-hidden">
+      {/* SIDEBAR OVERLAY */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40 transition-opacity"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* SLIDE-OUT SIDEBAR */}
+      <div 
+        className={`fixed top-0 left-0 h-full w-80 bg-white shadow-2xl z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+      >
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-6 w-6 text-green-500" />
+            <span className="font-bold text-lg text-gray-800">Market Explorer</span>
+          </div>
+          <button onClick={() => setIsSidebarOpen(false)} className="text-gray-500 hover:text-gray-800 transition-colors p-1">
+            <X className="h-6 w-6" />
+          </button>
         </div>
 
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (searchInput) setActiveSymbol(searchInput.toUpperCase());
-          }}
-          className="flex gap-2"
-        >
-          <input
-            type="text"
-            placeholder="Search Ticker (e.g. AAPL)"
-            className="border border-gray-300 rounded-md px-4 py-1 text-sm focus:outline-none focus:border-blue-500 uppercase"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-          />
-          <button
-            type="submit"
-            className="bg-blue-600 text-white px-4 py-1 rounded-md text-sm font-bold hover:bg-blue-700"
+        <div className="p-4 border-b border-gray-100">
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (searchInput) {
+                setActiveSymbol(searchInput.toUpperCase());
+                setIsSidebarOpen(false);
+              }
+            }}
+            className="flex gap-2"
           >
-            Load Data
+            <div className="relative w-full">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search Ticker..."
+                className="w-full border border-gray-300 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-blue-500 uppercase transition-all"
+                value={searchInput}
+                onChange={(e) => setSearchInput(e.target.value)}
+              />
+            </div>
+            <button
+              type="submit"
+              className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors shadow-sm"
+            >
+              Go
+            </button>
+          </form>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 space-y-2">
+          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 px-2">Popular Assets</h3>
+          {POPULAR_STOCKS.map((stock) => (
+            <button
+              key={stock.symbol}
+              onClick={() => {
+                setActiveSymbol(stock.symbol);
+                setSearchInput(""); 
+                setIsSidebarOpen(false);
+              }}
+              className={`w-full flex items-center justify-between p-3 rounded-xl transition-all ${activeSymbol === stock.symbol ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50 border border-transparent'}`}
+            >
+              <div className="flex flex-col items-start">
+                <span className={`font-bold ${activeSymbol === stock.symbol ? 'text-blue-700' : 'text-gray-800'}`}>{stock.symbol}</span>
+                <span className="text-xs text-gray-500">{stock.name}</span>
+              </div>
+              {activeSymbol === stock.symbol && (
+                <div className="h-2 w-2 rounded-full bg-blue-500"></div>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <nav className="bg-white border-b border-gray-200 px-6 py-4 flex flex-wrap justify-between items-center z-10 gap-y-4">
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={() => setIsSidebarOpen(true)}
+            className="p-2 -ml-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
+          >
+            <Menu className="h-6 w-6" />
           </button>
-        </form>
+          <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+            <TrendingUp className="h-6 w-6 text-green-500" />
+            <h1 className="text-xl font-bold text-gray-800">Tradeverse AI</h1>
+          </div>
+        </div>
 
         <div className="hidden md:flex items-center gap-3 bg-green-50 px-4 py-2 rounded-lg border border-green-200 shadow-sm ml-4">
           <span className="text-sm font-semibold text-green-700 uppercase tracking-wider">
