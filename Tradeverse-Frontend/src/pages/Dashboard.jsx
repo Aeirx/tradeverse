@@ -397,30 +397,42 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody>
-                    {portfolio.map((stock, index) => (
-                      <tr
-                        key={index}
-                        className="border-b border-gray-50 hover:bg-gray-50"
-                      >
-                        <td className="py-3 font-bold text-blue-600">
-                          {stock.symbol}
-                        </td>
-                        <td className="py-3 font-semibold">{stock.shares}</td>
-                        <td className="py-3 text-gray-600">
-                          ${stock.buyPrice?.toFixed(2) || "150.00"}
-                        </td>
-                        <td className="py-3 font-bold text-green-600">
-                          $
-                          {(
-                            Number(stock.shares) *
-                            (Number(stock.buyPrice) || livePrice || 0)
-                          ).toLocaleString(undefined, {
-                            minimumFractionDigits: 2,
-                            maximumFractionDigits: 2,
-                          })}
-                        </td>
-                      </tr>
-                    ))}
+                    {portfolio.map((stock, index) => {
+                      // Look for the exact Mongoose names
+                      const displaySymbol = stock.stockSymbol;
+                      const displayShares = stock.quantity;
+                      const displayPrice =
+                        stock.averagePrice || livePrice || 150;
+
+                      // Hide the old ghost rows from our previous tests
+                      if (!displaySymbol) return null;
+
+                      return (
+                        <tr
+                          key={index}
+                          className="border-b border-gray-50 hover:bg-gray-50"
+                        >
+                          <td className="py-3 font-bold text-blue-600">
+                            {displaySymbol}
+                          </td>
+                          <td className="py-3 font-semibold">
+                            {displayShares}
+                          </td>
+                          <td className="py-3 text-gray-600">
+                            ${Number(displayPrice).toFixed(2)}
+                          </td>
+                          <td className="py-3 font-bold text-green-600">
+                            $
+                            {(
+                              Number(displayShares) * Number(displayPrice)
+                            ).toLocaleString(undefined, {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
