@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 
-export default function TradingChart({ symbol }) {
+export default function TradingChart({ symbol, isDarkMode }) {
   const container = useRef();
 
   useEffect(() => {
@@ -19,11 +19,11 @@ export default function TradingChart({ symbol }) {
         "symbol": "NASDAQ:${symbol}",
         "interval": "D",
         "timezone": "Etc/UTC",
-        "theme": "light",
+        "theme": ${isDarkMode ? '"dark"' : '"light"'},
         "style": "1",
         "locale": "en",
         "enable_publishing": false,
-        "backgroundColor": "rgba(255, 255, 255, 1)",
+        "backgroundColor": ${isDarkMode ? '"rgba(2, 6, 23, 1)"' : '"rgba(255, 255, 255, 1)"'},
         "gridColor": "rgba(240, 243, 250, 0)",
         "hide_top_toolbar": false,
         "hide_legend": false,
@@ -31,7 +31,7 @@ export default function TradingChart({ symbol }) {
         "container_id": "tradingview_widget_${symbol}"
       }`;
     container.current.appendChild(script);
-  }, [symbol]); // <-- This tells React: "If symbol changes, run this again!"
+  }, [symbol, isDarkMode]); // <-- This tells React: "If symbol changes, run this again!"
 
   return (
     <div
