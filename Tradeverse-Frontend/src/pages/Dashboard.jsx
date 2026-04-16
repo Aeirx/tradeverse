@@ -70,11 +70,15 @@ export default function Dashboard() {
   const [takeProfit, setTakeProfit] = useState(15);
   const [maxCapital, setMaxCapital] = useState(1000);
   const botIntervalRef = useRef(null);
+  const portfolioRef = useRef(portfolio); // Always reflects latest portfolio (fixes stale closure)
 
   // --- AUTO-SCROLL LOG ---
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
+
+  // Keep portfolioRef in sync with portfolio state
+  useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
 
   const addLog = (msg) => setLogs((prev) => [...prev, msg]);
 
@@ -181,26 +185,40 @@ export default function Dashboard() {
               setBalance(refresh.data.walletBalance);
               setPortfolio(refresh.data.portfolio);
             } else if (signal.includes("SELL") && confidence > 65) {
-              // For SELL: find how many shares we own, sell all of them
-              const holding = (portfolio || []).find((s) => s.stockSymbol === symbol);
-              const sellQty = holding ? Math.max(1, holding.quantity) : 1;
-              addLog(`> 🔴 BOT EXECUTING SELL: ${sellQty} share(s) of ${symbol}`);
-              await axios.post(
-                "http://localhost:8000/api/v1/trades/sell",
-                { symbol, quantity: sellQty },
-                { headers: { Authorization: `Bearer ${token}` } }
-              );
-              addLog(`> ✅ SELL ORDER FILLED: ${sellQty} share(s) of ${symbol}`);
-              const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
-                headers: { Authorization: `Bearer ${token}` },
-              });
-              setBalance(refresh.data.walletBalance);
-              setPortfolio(refresh.data.portfolio);
+              // Check if we actually own shares before attempting a sell
+              // Use portfolioRef.current (not `portfolio`) to avoid stale closure bug
+              const holding = (portfolioRef.current || []).find((s) => s.stockSymbol === symbol);
+              if (!holding || holding.quantity <= 0) {
+                addLog(`> ⏭️ ${symbol}: SELL signal — no shares held, skipping.`);
+              } else {
+                const sellQty = holding.quantity;
+                addLog(`> 🔴 BOT EXECUTING SELL: ${sellQty} share(s) of ${symbol}`);
+                await axios.post(
+                  "http://localhost:8000/api/v1/trades/sell",
+                  { symbol, quantity: sellQty },
+                  { headers: { Authorization: `Bearer ${token}` } }
+                );
+                addLog(`> ✅ SELL ORDER FILLED: ${sellQty} share(s) of ${symbol}`);
+                const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
+                  headers: { Authorization: `Bearer ${token}` },
+                });
+                setBalance(refresh.data.walletBalance);
+                setPortfolio(refresh.data.portfolio);
+              }
             } else {
               addLog(`> ⏸ ${symbol}: HOLD — signal below confidence threshold.`);
             }
           } catch (err) {
-            addLog(`> ⚠️ Error scanning ${symbol}: ${err.message}`);
+            // Distinguish between business rejections (400) and real system errors
+            const status = err?.response?.status;
+            const serverMsg = err?.response?.data?.error;
+            if (status === 400) {
+              addLog(`> 🚧 ${symbol}: ${serverMsg || "Trade rejected by broker."}`);
+            } else if (status === 500) {
+              addLog(`> 🔥 ${symbol}: Server error — ${serverMsg || "Internal error, try again."}`);
+            } else {
+              addLog(`> ⚠️ ${symbol}: Network/connection error — ${err.message}`);
+            }
           }
           await new Promise((r) => setTimeout(r, 1500));
         }
