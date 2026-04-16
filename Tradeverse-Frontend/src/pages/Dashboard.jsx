@@ -160,34 +160,44 @@ export default function Dashboard() {
             const confidence = aiRes.data.confidence || 0;
             addLog(`> 📊 ${symbol}: ${signal} (${confidence.toFixed(1)}% confidence)`);
 
-            if (signal.includes("BUY") && confidence > 60) {
-              addLog(`> 🟢 BOT EXECUTING BUY for ${symbol}...`);
-              await axios.post(
-                "http://localhost:8000/api/v1/trades/buy",
-                { symbol, quantity: 1 },
+            // FIX #5: Fetch live price first, calculate quantity from maxCapital
+            if (signal.includes("BUY") && confidence > 65) {
+              const priceRes = await axios.get(
+                `http://localhost:8000/api/v1/trades/price/${symbol}`,
                 { headers: { Authorization: `Bearer ${token}` } }
               );
-              addLog(`> ✅ BUY ORDER FILLED: 1 share of ${symbol}`);
+              const lp = priceRes.data.price;
+              const qty = Math.max(1, Math.floor(maxCapital / lp));
+              addLog(`> 🟢 BOT EXECUTING BUY: ${qty} share(s) of ${symbol} @ $${Number(lp).toFixed(2)} (capital: $${maxCapital})`);
+              await axios.post(
+                "http://localhost:8000/api/v1/trades/buy",
+                { symbol, quantity: qty },
+                { headers: { Authorization: `Bearer ${token}` } }
+              );
+              addLog(`> ✅ BUY ORDER FILLED: ${qty} share(s) of ${symbol}`);
               const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
                 headers: { Authorization: `Bearer ${token}` },
               });
               setBalance(refresh.data.walletBalance);
               setPortfolio(refresh.data.portfolio);
-            } else if (signal.includes("SELL") && confidence > 60) {
-              addLog(`> 🔴 BOT EXECUTING SELL for ${symbol}...`);
+            } else if (signal.includes("SELL") && confidence > 65) {
+              // For SELL: find how many shares we own, sell all of them
+              const holding = (portfolio || []).find((s) => s.stockSymbol === symbol);
+              const sellQty = holding ? Math.max(1, holding.quantity) : 1;
+              addLog(`> 🔴 BOT EXECUTING SELL: ${sellQty} share(s) of ${symbol}`);
               await axios.post(
                 "http://localhost:8000/api/v1/trades/sell",
-                { symbol, quantity: 1 },
+                { symbol, quantity: sellQty },
                 { headers: { Authorization: `Bearer ${token}` } }
               );
-              addLog(`> ✅ SELL ORDER FILLED: 1 share of ${symbol}`);
+              addLog(`> ✅ SELL ORDER FILLED: ${sellQty} share(s) of ${symbol}`);
               const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
                 headers: { Authorization: `Bearer ${token}` },
               });
               setBalance(refresh.data.walletBalance);
               setPortfolio(refresh.data.portfolio);
             } else {
-              addLog(`> ⏸ ${symbol}: HOLD — no decisive signal.`);
+              addLog(`> ⏸ ${symbol}: HOLD — signal below confidence threshold.`);
             }
           } catch (err) {
             addLog(`> ⚠️ Error scanning ${symbol}: ${err.message}`);
