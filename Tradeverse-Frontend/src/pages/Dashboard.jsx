@@ -1,36 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  LogOut,
-  TrendingUp,
-  Activity,
-  Server,
-  Settings,
-  Zap,
-  Menu,
-  X,
-  Search,
-  Bot,
-  Moon,
-  Sun,
-} from "lucide-react";
+import { LogOut, TrendingUp, Activity, Server, Menu, Moon, Sun } from "lucide-react";
 import axios from "axios";
-import TradingChart from "../components/TradingChart";
 
-const POPULAR_STOCKS = [
-  { symbol: "AAPL", name: "Apple Inc." },
-  { symbol: "MSFT", name: "Microsoft Corp." },
-  { symbol: "TSLA", name: "Tesla Inc." },
-  { symbol: "NVDA", name: "NVIDIA Corp." },
-  { symbol: "AMZN", name: "Amazon.com Inc." },
-  { symbol: "META", name: "Meta Platforms" },
-  { symbol: "GOOGL", name: "Alphabet Inc." },
-  { symbol: "NFLX", name: "Netflix Inc." },
-  { symbol: "AMD", name: "Advanced Micro Devices" },
-  { symbol: "INTC", name: "Intel Corp." },
-  { symbol: "COIN", name: "Coinbase Global" },
-  { symbol: "SPY", name: "S&P 500 ETF Trust" },
-];
+// --- EXTRACTED COMPONENTS ---
+import MarketSidebar from "../components/MarketSidebar";
+import AlgoWeightControls from "../components/AlgoWeightControls";
+import HoldingsTable from "../components/HoldingsTable";
+import BotControlPanel from "../components/BotControlPanel";
+import ExecutionLog from "../components/ExecutionLog";
+import TradingPanel from "../components/TradingPanel";
 
 const ALL_TARGETS = ["AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "META", "GOOGL", "AMD", "COIN"];
 
@@ -54,7 +33,6 @@ export default function Dashboard() {
     "> Secure JWT Token verified.",
     "> Awaiting algorithm execution command...",
   ]);
-  const logEndRef = useRef(null);
 
   // --- WALLET & TRADING STATE ---
   const [balance, setBalance] = useState(null);
@@ -70,12 +48,7 @@ export default function Dashboard() {
   const [takeProfit, setTakeProfit] = useState(15);
   const [maxCapital, setMaxCapital] = useState(1000);
   const botIntervalRef = useRef(null);
-  const portfolioRef = useRef(portfolio); // Always reflects latest portfolio (fixes stale closure)
-
-  // --- AUTO-SCROLL LOG ---
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+  const portfolioRef = useRef(portfolio);
 
   // Keep portfolioRef in sync with portfolio state
   useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
@@ -164,7 +137,6 @@ export default function Dashboard() {
             const confidence = aiRes.data.confidence || 0;
             addLog(`> 📊 ${symbol}: ${signal} (${confidence.toFixed(1)}% confidence)`);
 
-            // FIX #5: Fetch live price first, calculate quantity from maxCapital
             if (signal.includes("BUY") && confidence > 65) {
               const priceRes = await axios.get(
                 `http://localhost:8000/api/v1/trades/price/${symbol}`,
@@ -185,8 +157,6 @@ export default function Dashboard() {
               setBalance(refresh.data.walletBalance);
               setPortfolio(refresh.data.portfolio);
             } else if (signal.includes("SELL") && confidence > 65) {
-              // Check if we actually own shares before attempting a sell
-              // Use portfolioRef.current (not `portfolio`) to avoid stale closure bug
               const holding = (portfolioRef.current || []).find((s) => s.stockSymbol === symbol);
               if (!holding || holding.quantity <= 0) {
                 addLog(`> ⏭️ ${symbol}: SELL signal — no shares held, skipping.`);
@@ -209,7 +179,6 @@ export default function Dashboard() {
               addLog(`> ⏸ ${symbol}: HOLD — signal below confidence threshold.`);
             }
           } catch (err) {
-            // Distinguish between business rejections (400) and real system errors
             const status = err?.response?.status;
             const serverMsg = err?.response?.data?.error;
             if (status === 400) {
@@ -334,75 +303,16 @@ export default function Dashboard() {
   return (
     <div className={`min-h-screen flex flex-col relative overflow-hidden transition-colors duration-300 ${isDarkMode ? "dark bg-slate-950 text-gray-100" : "bg-gray-50 text-gray-800"}`}>
 
-      {/* SIDEBAR OVERLAY */}
-      {isSidebarOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 backdrop-blur-sm z-40"
-          onClick={() => setIsSidebarOpen(false)}
-        />
-      )}
-
-      {/* SLIDE-OUT SIDEBAR */}
-      <div className={`fixed top-0 left-0 h-full w-80 z-50 flex flex-col shadow-2xl transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? "translate-x-0" : "-translate-x-full"} ${isDarkMode ? "bg-slate-900 text-gray-100" : "bg-white text-gray-800"}`}>
-        <div className={`p-5 flex justify-between items-center border-b ${isDarkMode ? "border-slate-700" : "border-gray-200"}`}>
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-6 w-6 text-green-500" />
-            <span className="font-bold text-lg">Market Explorer</span>
-          </div>
-          <button onClick={() => setIsSidebarOpen(false)} className="p-1 rounded-lg hover:bg-white/10 transition-colors">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className={`p-4 border-b ${isDarkMode ? "border-slate-700" : "border-gray-200"}`}>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (searchInput) {
-                setActiveSymbol(searchInput.toUpperCase());
-                setSearchInput("");
-                setIsSidebarOpen(false);
-              }
-            }}
-            className="flex gap-2"
-          >
-            <div className="relative w-full">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-              <input
-                type="text"
-                placeholder="Search Ticker..."
-                className={`w-full border rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-blue-500 uppercase transition-all ${isDarkMode ? "bg-slate-800 border-slate-600 text-gray-100 placeholder:text-slate-400" : "bg-white border-gray-300 text-gray-800"}`}
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-              />
-            </div>
-            <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors">
-              Go
-            </button>
-          </form>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-4 space-y-1">
-          <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3 px-2">Popular Assets</h3>
-          {POPULAR_STOCKS.map((stock) => (
-            <button
-              key={stock.symbol}
-              onClick={() => { setActiveSymbol(stock.symbol); setSearchInput(""); setIsSidebarOpen(false); }}
-              className={`w-full flex items-center justify-between p-3 rounded-xl transition-all ${
-                activeSymbol === stock.symbol
-                  ? "bg-blue-600 text-white"
-                  : isDarkMode ? "hover:bg-slate-800 text-gray-300" : "hover:bg-gray-100 text-gray-700"
-              }`}
-            >
-              <div className="flex flex-col items-start">
-                <span className="font-bold">{stock.symbol}</span>
-                <span className={`text-xs ${activeSymbol === stock.symbol ? "text-blue-100" : "text-gray-400"}`}>{stock.name}</span>
-              </div>
-              {activeSymbol === stock.symbol && <div className="h-2 w-2 rounded-full bg-white" />}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* SIDEBAR */}
+      <MarketSidebar
+        isDarkMode={isDarkMode}
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
+        activeSymbol={activeSymbol}
+        setActiveSymbol={setActiveSymbol}
+        searchInput={searchInput}
+        setSearchInput={setSearchInput}
+      />
 
       {/* TOP NAV */}
       <nav className={`px-6 py-4 flex flex-wrap justify-between items-center z-10 gap-y-4 border-b ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-200"}`}>
@@ -427,14 +337,12 @@ export default function Dashboard() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* DARK MODE TOGGLE */}
           <button
             onClick={() => setIsDarkMode((prev) => !prev)}
             className={`flex items-center justify-center p-2 rounded-full border transition-colors focus:outline-none ${isDarkMode ? "bg-slate-700 border-slate-600 text-yellow-400 hover:bg-slate-600" : "bg-gray-100 border-gray-200 text-indigo-500 hover:bg-gray-200"}`}
           >
             {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </button>
-
           <button
             onClick={handleLogout}
             className={`flex items-center gap-2 text-sm font-medium transition-colors hover:text-red-500 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
@@ -464,275 +372,53 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* MAIN GRID: ALGO WEIGHTS + HOLDINGS */}
+        {/* ALGO WEIGHTS + HOLDINGS */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
-
-          {/* ALGO WEIGHTS */}
-          <div className={`p-6 rounded-xl border shadow-sm col-span-1 ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"}`}>
-            <div className={`flex items-center gap-2 mb-6 border-b pb-4 ${isDarkMode ? "border-slate-700" : "border-gray-200"}`}>
-              <Settings className={`h-5 w-5 ${isDarkMode ? "text-gray-300" : "text-gray-700"}`} />
-              <h2 className="text-lg font-bold">Algorithm Weights</h2>
-            </div>
-            <div className="space-y-6">
-              {[
-                { label: "News Sentiment (Pinecone)", value: sentimentWeight, setter: setSentimentWeight, color: "text-green-500", accent: "accent-green-500" },
-                { label: "RSI Technical", value: rsiWeight, setter: setRsiWeight, color: "text-blue-500", accent: "accent-blue-500" },
-                { label: "Moving Average", value: maWeight, setter: setMaWeight, color: "text-purple-500", accent: "accent-purple-500" },
-              ].map((w) => (
-                <div key={w.label}>
-                  <div className="flex justify-between text-sm mb-2">
-                    <label className={`font-medium ${isDarkMode ? "text-gray-300" : "text-gray-700"}`}>{w.label}</label>
-                    <span className={`font-bold ${w.color}`}>{Math.round(w.value * 100)}%</span>
-                  </div>
-                  <input type="range" min="0" max="1" step="0.05" value={w.value}
-                    onChange={(e) => w.setter(parseFloat(e.target.value))}
-                    className={`w-full ${w.accent}`} />
-                </div>
-              ))}
-            </div>
-            <button
-              onClick={handleRunAlgorithm}
-              className="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md"
-            >
-              <Zap className="h-5 w-5 text-yellow-400" /> Execute Strategy
-            </button>
-          </div>
-
-          {/* MY HOLDINGS */}
-          <div className={`p-6 rounded-xl border shadow-sm col-span-1 lg:col-span-2 ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"}`}>
-            <h2 className="font-bold text-xl mb-4">My Holdings</h2>
-            {portfolio.length === 0 ? (
-              <p className={`italic ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}>
-                Your vault is empty. Execute a trade to begin.
-              </p>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-sm">
-                  <thead>
-                    <tr className={`border-b text-xs uppercase tracking-wider ${isDarkMode ? "border-slate-700 text-gray-400" : "border-gray-200 text-gray-500"}`}>
-                      <th className="pb-3">Asset</th>
-                      <th className="pb-3">Shares</th>
-                      <th className="pb-3">Total Spent</th>
-                      <th className="pb-3">Live Value</th>
-                      <th className="pb-3">Net Return</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {portfolio.map((stock, index) => {
-                      if (!stock.stockSymbol) return null;
-                      const shares = Number(stock.quantity || 0);
-                      const avgPrice = Number(stock.averagePrice || 0);
-                      const totalSpent = shares * avgPrice;
-                      const lp = portfolioLivePrices[stock.stockSymbol];
-                      const liveValue = lp ? shares * Number(lp) : null;
-                      const pnl = liveValue !== null ? liveValue - totalSpent : null;
-                      const pnlPct = totalSpent > 0 && pnl !== null ? (pnl / totalSpent) * 100 : null;
-                      const isProfitable = pnl !== null && pnl >= 0;
-
-                      return (
-                        <tr key={index} className={`border-b transition-colors ${isDarkMode ? "border-slate-800 hover:bg-slate-800" : "border-gray-50 hover:bg-gray-50"}`}>
-                          <td className="py-3 font-bold text-blue-500">{stock.stockSymbol}</td>
-                          <td className={`py-3 font-semibold ${isDarkMode ? "text-gray-200" : "text-gray-800"}`}>{shares}</td>
-                          <td className={`py-3 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                            ${totalSpent.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </td>
-                          <td className={`py-3 font-semibold ${isDarkMode ? "text-gray-200" : "text-gray-800"}`}>
-                            {liveValue !== null
-                              ? `$${liveValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                              : <span className="text-gray-400 text-xs">Loading...</span>}
-                          </td>
-                          <td className={`py-3 font-bold ${isProfitable ? "text-green-500" : "text-red-500"}`}>
-                            {pnl !== null ? (
-                              <>
-                                {isProfitable ? "+" : ""}${pnl.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                <span className="ml-1 text-xs opacity-80">
-                                  ({isProfitable ? "+" : ""}{pnlPct.toFixed(2)}%)
-                                </span>
-                              </>
-                            ) : (
-                              <span className="text-gray-400 text-xs">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                  <tfoot>
-                    <tr className={`border-t-2 ${isDarkMode ? "border-slate-600" : "border-gray-300"}`}>
-                      <td colSpan={3} className={`pt-3 font-bold text-xs uppercase tracking-wider ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}>
-                        Aggregate Valuation
-                      </td>
-                      <td colSpan={2} className="pt-3 font-black text-lg text-indigo-500">
-                        ${aggregateValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            )}
-          </div>
+          <AlgoWeightControls
+            isDarkMode={isDarkMode}
+            sentimentWeight={sentimentWeight}
+            setSentimentWeight={setSentimentWeight}
+            rsiWeight={rsiWeight}
+            setRsiWeight={setRsiWeight}
+            maWeight={maWeight}
+            setMaWeight={setMaWeight}
+            onExecute={handleRunAlgorithm}
+          />
+          <HoldingsTable
+            isDarkMode={isDarkMode}
+            portfolio={portfolio}
+            portfolioLivePrices={portfolioLivePrices}
+            aggregateValue={aggregateValue}
+          />
         </div>
 
         {/* AUTO-PILOT BOT */}
-        <div className="mb-6">
-          <div className="bg-gradient-to-br from-indigo-900 via-purple-900 to-indigo-950 p-6 rounded-xl border border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.15)] relative overflow-hidden">
-            {isBotActive && (
-              <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 rounded-xl blur opacity-25 animate-pulse" />
-            )}
-            <div className="relative z-10">
-              {/* Bot Header */}
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-bold text-white flex items-center gap-2">
-                  <Bot className={`h-6 w-6 ${isBotActive ? "text-cyan-400 animate-pulse" : "text-gray-400"}`} />
-                  Auto-Pilot Bot
-                </h2>
-                <button
-                  onClick={() => setIsBotActive(!isBotActive)}
-                  className={`relative inline-flex h-7 w-14 items-center rounded-full transition-colors duration-300 focus:outline-none ${isBotActive ? "bg-cyan-500 shadow-[0_0_10px_rgba(6,182,212,0.6)]" : "bg-gray-700"}`}
-                >
-                  <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-300 ${isBotActive ? "translate-x-8" : "translate-x-1"}`} />
-                </button>
-              </div>
-
-              {/* Terminal Status */}
-              <div className="mb-4">
-                <p className="text-xs text-gray-400 uppercase tracking-wider mb-1">Terminal Status</p>
-                <div className={`text-sm font-mono px-3 py-2 rounded-lg inline-block ${isBotActive ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30" : "bg-gray-800 text-gray-500 border border-gray-700"}`}>
-                  {isBotActive ? "[RUNNING]" : "[STANDBY]"}
-                </div>
-              </div>
-
-              {/* Target Intel */}
-              <div className="mb-5">
-                <p className="text-xs text-gray-400 uppercase tracking-wider mb-2">Target Intel</p>
-                <div className="flex flex-wrap gap-2">
-                  {ALL_TARGETS.map((sym) => (
-                    <button
-                      key={sym}
-                      onClick={() => toggleBotTarget(sym)}
-                      className={`px-3 py-1 rounded-full text-xs font-bold border transition-all ${
-                        botTargets.includes(sym)
-                          ? "bg-cyan-500 border-cyan-400 text-white shadow-[0_0_8px_rgba(6,182,212,0.5)]"
-                          : "bg-gray-800 border-gray-600 text-gray-400 hover:border-gray-400"
-                      }`}
-                    >
-                      {sym}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Bot Sliders */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div>
-                  <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Max Capital Allocation</span>
-                    <span className="text-cyan-400 font-bold">${maxCapital}</span>
-                  </div>
-                  <input type="range" min="100" max="10000" step="100" value={maxCapital}
-                    onChange={(e) => setMaxCapital(Number(e.target.value))}
-                    className="w-full accent-cyan-500" />
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Hard Stop Loss (%)</span>
-                    <span className="text-red-400 font-bold">{stopLoss}%</span>
-                  </div>
-                  <input type="range" min="1" max="50" step="1" value={stopLoss}
-                    onChange={(e) => setStopLoss(Number(e.target.value))}
-                    className="w-full accent-red-500" />
-                </div>
-                <div>
-                  <div className="flex justify-between text-xs text-gray-400 mb-1">
-                    <span>Take Profit (%)</span>
-                    <span className="text-green-400 font-bold">{takeProfit}%</span>
-                  </div>
-                  <input type="range" min="1" max="500" step="1" value={takeProfit}
-                    onChange={(e) => setTakeProfit(Number(e.target.value))}
-                    className="w-full accent-green-500" />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+        <BotControlPanel
+          isBotActive={isBotActive}
+          setIsBotActive={setIsBotActive}
+          botTargets={botTargets}
+          toggleBotTarget={toggleBotTarget}
+          maxCapital={maxCapital}
+          setMaxCapital={setMaxCapital}
+          stopLoss={stopLoss}
+          setStopLoss={setStopLoss}
+          takeProfit={takeProfit}
+          setTakeProfit={setTakeProfit}
+        />
 
         {/* EXECUTION LOG */}
-        <div className="bg-slate-950 p-6 rounded-xl shadow-inner mb-6 flex flex-col h-64">
-          <div className="flex items-center gap-2 mb-4 border-b border-gray-700 pb-4">
-            <Server className="h-5 w-5 text-gray-400" />
-            <h2 className="text-lg font-bold text-gray-100">Live Execution Log</h2>
-          </div>
-          <div className="flex-1 font-mono text-sm text-green-400 overflow-y-auto space-y-1">
-            {logs.map((log, index) => (
-              <p
-                key={index}
-                className={
-                  log.includes("ERROR") || log.includes("REJECTED")
-                    ? "text-red-400"
-                    : log.includes("SIGNAL") || log.includes("📊")
-                    ? "text-yellow-400 font-bold"
-                    : log.includes("✅") || log.includes("SUCCESS")
-                    ? "text-green-300"
-                    : "text-green-400"
-                }
-              >
-                {log}
-              </p>
-            ))}
-            <div ref={logEndRef} />
-          </div>
-        </div>
+        <ExecutionLog logs={logs} />
 
         {/* TRADING CHART + BUY/SELL */}
-        <div className={`p-4 rounded-xl border shadow-sm flex flex-col gap-4 h-[620px] w-full ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"}`}>
-          <div className="flex-1 overflow-hidden rounded-lg border border-slate-700">
-            <TradingChart symbol={activeSymbol} isDarkMode={isDarkMode} />
-          </div>
-
-          <div className={`flex items-center justify-between p-4 rounded-lg border ${isDarkMode ? "bg-slate-800 border-slate-700" : "bg-gray-50 border-gray-200"}`}>
-            <div className="flex flex-col">
-              <span className={`text-sm font-bold uppercase tracking-wider ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}>Live Price</span>
-              <span className={`text-2xl font-black ${isDarkMode ? "text-gray-100" : "text-gray-800"}`}>
-                {livePrice === "ERROR" ? (
-                  <span className="text-red-500">API Error</span>
-                ) : livePrice !== null ? (
-                  `$${Number(livePrice).toFixed(2)}`
-                ) : (
-                  "Fetching..."
-                )}
-              </span>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <label className={`font-bold ${isDarkMode ? "text-gray-300" : "text-gray-700"}`}>Shares:</label>
-                <input
-                  type="number"
-                  min="1"
-                  value={tradeQuantity}
-                  onChange={(e) => setTradeQuantity(e.target.value)}
-                  className={`border rounded-md px-3 py-2 w-24 text-center text-lg font-semibold focus:outline-none focus:border-blue-500 ${isDarkMode ? "bg-slate-700 border-slate-600 text-gray-100" : "bg-white border-gray-300 text-gray-800"}`}
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleSellStock}
-                  disabled={livePrice === null || livePrice === "ERROR"}
-                  className="bg-red-500 text-white px-6 py-2 rounded-lg font-bold hover:bg-red-600 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  SELL
-                </button>
-                <button
-                  onClick={handleBuyStock}
-                  disabled={livePrice === null || livePrice === "ERROR"}
-                  className="bg-green-600 text-white px-8 py-2 rounded-lg font-bold text-lg hover:bg-green-700 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  🛒 BUY {activeSymbol}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <TradingPanel
+          isDarkMode={isDarkMode}
+          activeSymbol={activeSymbol}
+          livePrice={livePrice}
+          tradeQuantity={tradeQuantity}
+          setTradeQuantity={setTradeQuantity}
+          onBuy={handleBuyStock}
+          onSell={handleSellStock}
+        />
 
       </main>
     </div>
