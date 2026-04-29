@@ -31,12 +31,6 @@ export default function Register() {
     setLoading(true);
     setError("");
 
-    if (!avatar) {
-      setError("Please upload an avatar image.");
-      setLoading(false);
-      return;
-    }
-
     try {
       // Because we have a file, we MUST use FormData, not standard JSON!
       const data = new FormData();
@@ -44,7 +38,9 @@ export default function Register() {
       data.append("username", formData.username);
       data.append("email", formData.email);
       data.append("password", formData.password);
-      data.append("avatar", avatar); // Attach the file
+      if (avatar) {
+        data.append("avatar", avatar); // Attach the file
+      }
 
       await axios.post("http://localhost:8000/api/v1/users/register", data, {
         headers: { "Content-Type": "multipart/form-data" },
@@ -137,7 +133,6 @@ export default function Register() {
             <input
               type="file"
               accept="image/*"
-              required
               onChange={handleFileChange}
               className="w-full border border-gray-300 rounded-lg px-4 py-2 text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
             />

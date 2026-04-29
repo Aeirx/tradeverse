@@ -211,6 +211,8 @@ export default function Dashboard() {
     setBotTargets((prev) =>
       prev.includes(sym) ? prev.filter((s) => s !== sym) : [...prev, sym]
     );
+    // Also switch the active trading panel to show this symbol
+    setActiveSymbol(sym);
   };
 
   // --- LOGOUT ---
@@ -258,7 +260,7 @@ export default function Dashboard() {
         { symbol: activeSymbol, quantity: tradeQuantity },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      setBalance(response.data.newBalance);
+      setBalance(response.data.data.walletBalance);
       addLog(`> SUCCESS: ${response.data.message}`);
       const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
         headers: { Authorization: `Bearer ${token}` },
