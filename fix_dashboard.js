@@ -1,4 +1,4 @@
-const fs = require('fs');
+ const fs = require('fs');
 const dashboardPath = 'c:\\Project\\tradeverse-frontend\\src\\pages\\Dashboard.jsx';
 const chartPath = 'c:\\Project\\tradeverse-frontend\\src\\components\\TradingChart.jsx';
 

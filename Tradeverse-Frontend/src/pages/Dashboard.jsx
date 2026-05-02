@@ -59,9 +59,7 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchWalletBalance = async () => {
       try {
-        const token = localStorage.getItem("tradeverse_token");
-        const response = await axios.get("http://localhost:8000/api/v1/users/balance", {
-          headers: { Authorization: `Bearer ${token}` },
+        const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
         });
         setBalance(response.data.walletBalance);
         setPortfolio(response.data.portfolio);
@@ -78,10 +76,8 @@ export default function Dashboard() {
     const fetchLivePrice = async () => {
       try {
         setLivePrice(null);
-        const token = localStorage.getItem("tradeverse_token");
         const response = await axios.get(
-          `http://localhost:8000/api/v1/trades/price/${activeSymbol}`,
-          { headers: { Authorization: `Bearer ${token}` } }
+          `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${activeSymbol}`
         );
         setLivePrice(response.data.price);
       } catch (error) {
@@ -96,13 +92,11 @@ export default function Dashboard() {
   useEffect(() => {
     const fetchPortfolioPrices = async () => {
       if (!portfolio || portfolio.length === 0) return;
-      const token = localStorage.getItem("tradeverse_token");
       try {
         const promises = portfolio.map(async (stock) => {
           if (!stock.stockSymbol) return null;
           const res = await axios.get(
-            `http://localhost:8000/api/v1/trades/price/${stock.stockSymbol}`,
-            { headers: { Authorization: `Bearer ${token}` } }
+            `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${stock.stockSymbol}`
           );
           return { symbol: stock.stockSymbol, price: res.data.price };
         });
@@ -128,8 +122,7 @@ export default function Dashboard() {
         for (const symbol of targets) {
           addLog(`> 🔍 Scanning ${symbol}...`);
           try {
-            const token = localStorage.getItem("tradeverse_token");
-            const aiRes = await axios.post("http://localhost:8001/api/predict", {
+            const aiRes = await axios.post(`${import.meta.env.VITE_AI_URL}/api/predict`, {
               symbol,
               weights: { sentiment: sentimentWeight, rsi: rsiWeight, ma: maWeight },
             });
@@ -139,20 +132,17 @@ export default function Dashboard() {
 
             if (signal.includes("BUY") && confidence > 65) {
               const priceRes = await axios.get(
-                `http://localhost:8000/api/v1/trades/price/${symbol}`,
-                { headers: { Authorization: `Bearer ${token}` } }
+                `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${symbol}`
               );
               const lp = priceRes.data.price;
               const qty = Math.max(1, Math.floor(maxCapital / lp));
               addLog(`> 🟢 BOT EXECUTING BUY: ${qty} share(s) of ${symbol} @ $${Number(lp).toFixed(2)} (capital: $${maxCapital})`);
               await axios.post(
-                "http://localhost:8000/api/v1/trades/buy",
-                { symbol, quantity: qty },
-                { headers: { Authorization: `Bearer ${token}` } }
+                `${import.meta.env.VITE_API_URL}/api/v1/trades/buy`,
+                { symbol, quantity: qty }
               );
               addLog(`> ✅ BUY ORDER FILLED: ${qty} share(s) of ${symbol}`);
-              const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
-                headers: { Authorization: `Bearer ${token}` },
+              const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
               });
               setBalance(refresh.data.walletBalance);
               setPortfolio(refresh.data.portfolio);
@@ -164,13 +154,11 @@ export default function Dashboard() {
                 const sellQty = holding.quantity;
                 addLog(`> 🔴 BOT EXECUTING SELL: ${sellQty} share(s) of ${symbol}`);
                 await axios.post(
-                  "http://localhost:8000/api/v1/trades/sell",
-                  { symbol, quantity: sellQty },
-                  { headers: { Authorization: `Bearer ${token}` } }
+                  `${import.meta.env.VITE_API_URL}/api/v1/trades/sell`,
+                  { symbol, quantity: sellQty }
                 );
                 addLog(`> ✅ SELL ORDER FILLED: ${sellQty} share(s) of ${symbol}`);
-                const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
-                  headers: { Authorization: `Bearer ${token}` },
+                const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
                 });
                 setBalance(refresh.data.walletBalance);
                 setPortfolio(refresh.data.portfolio);
@@ -180,7 +168,7 @@ export default function Dashboard() {
             }
           } catch (err) {
             const status = err?.response?.status;
-            const serverMsg = err?.response?.data?.error;
+            const serverMsg = err?.response?.data?.message || err?.response?.data?.error;
             if (status === 400) {
               addLog(`> 🚧 ${symbol}: ${serverMsg || "Trade rejected by broker."}`);
             } else if (status === 500) {
@@ -216,9 +204,12 @@ export default function Dashboard() {
   };
 
   // --- LOGOUT ---
-  const handleLogout = () => {
-    localStorage.removeItem("tradeverse_token");
-    navigate("/");
+  const handleLogout = async () => {
+    try {
+      await axios.post(`${import.meta.env.VITE_API_URL}/api/v1/users/logout`);
+    } finally {
+      navigate("/");
+    }
   };
 
   // --- MANUAL ALGORITHM EXECUTION ---
@@ -226,7 +217,7 @@ export default function Dashboard() {
     addLog(`> Initiating sequence for ${activeSymbol}...`);
     addLog(`> Weights: Sentiment(${sentimentWeight}), RSI(${rsiWeight}), MA(${maWeight})`);
     try {
-      const response = await axios.post("http://localhost:8001/api/predict", {
+      const response = await axios.post(`${import.meta.env.VITE_AI_URL}/api/predict`, {
         symbol: activeSymbol,
         weights: { sentiment: sentimentWeight, rsi: rsiWeight, ma: maWeight },
       });
@@ -254,20 +245,17 @@ export default function Dashboard() {
   const handleBuyStock = async () => {
     try {
       addLog(`> Executing BUY order for ${tradeQuantity} shares of ${activeSymbol}...`);
-      const token = localStorage.getItem("tradeverse_token");
       const response = await axios.post(
-        "http://localhost:8000/api/v1/trades/buy",
-        { symbol: activeSymbol, quantity: tradeQuantity },
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${import.meta.env.VITE_API_URL}/api/v1/trades/buy`,
+        { symbol: activeSymbol, quantity: tradeQuantity }
       );
       setBalance(response.data.data.walletBalance);
       addLog(`> SUCCESS: ${response.data.message}`);
-      const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
-        headers: { Authorization: `Bearer ${token}` },
+      const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
       });
       setPortfolio(refresh.data.portfolio);
     } catch (error) {
-      addLog(`> ORDER REJECTED: ${error.response?.data?.error || "Network error."}`);
+      addLog(`> ORDER REJECTED: ${error.response?.data?.message || error.response?.data?.error || "Network error."}`);
     }
   };
 
@@ -275,20 +263,17 @@ export default function Dashboard() {
   const handleSellStock = async () => {
     try {
       addLog(`> Executing SELL order for ${tradeQuantity} shares of ${activeSymbol}...`);
-      const token = localStorage.getItem("tradeverse_token");
       const response = await axios.post(
-        "http://localhost:8000/api/v1/trades/sell",
-        { symbol: activeSymbol, quantity: tradeQuantity },
-        { headers: { Authorization: `Bearer ${token}` } }
+        `${import.meta.env.VITE_API_URL}/api/v1/trades/sell`,
+        { symbol: activeSymbol, quantity: tradeQuantity }
       );
       addLog(`> SUCCESS: ${response.data.message}`);
-      const refresh = await axios.get("http://localhost:8000/api/v1/users/balance", {
-        headers: { Authorization: `Bearer ${token}` },
+      const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
       });
       setBalance(refresh.data.walletBalance);
       setPortfolio(refresh.data.portfolio);
     } catch (error) {
-      addLog(`> ORDER REJECTED: ${error.response?.data?.error || "Network error."}`);
+      addLog(`> ORDER REJECTED: ${error.response?.data?.message || error.response?.data?.error || "Network error."}`);
     }
   };
 
@@ -361,7 +346,7 @@ export default function Dashboard() {
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
           {[
             { icon: <Activity className="h-5 w-5 text-blue-500" />, label: "Live Market Status", value: `Tracking ${activeSymbol}...` },
-            { icon: <Server className="h-5 w-5 text-purple-500" />, label: "AI Vector Memory", value: "Connected" },
+            { icon: <Server className="h-5 w-5 text-purple-500" />, label: "Analysis Engine Status", value: "Connected" },
             { icon: <TrendingUp className="h-5 w-5 text-gray-400" />, label: "Current Signal", value: "Awaiting execution..." },
           ].map((card, i) => (
             <div key={i} className={`p-6 rounded-xl border shadow-sm ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"}`}>

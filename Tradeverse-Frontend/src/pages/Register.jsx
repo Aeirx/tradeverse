@@ -42,7 +42,7 @@ export default function Register() {
         data.append("avatar", avatar); // Attach the file
       }
 
-      await axios.post("http://localhost:8000/api/v1/users/register", data, {
+      await axios.post(`${import.meta.env.VITE_API_URL}/api/v1/users/register`, data, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 

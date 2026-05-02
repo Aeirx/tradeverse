@@ -2,33 +2,30 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock, Mail, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
-import axios from "axios"; // The bridge to the backend!
+import axios from "axios";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState(""); // New state to show red error messages
+  const [error, setError] = useState("");
   const navigate = useNavigate();
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    setError(""); // Clear any old errors
+    setError("");
 
     try {
-      // 1. Send the email/password to your Node.js backend
       const response = await axios.post(
-        "http://localhost:8000/api/v1/users/login",
+        `${import.meta.env.VITE_API_URL}/api/v1/users/login`,
         {
           email: email,
           password: password,
         },
       );
 
-      // 2. If successful, MongoDB will send back a JWT Token! Let's save it in the browser.
+      // 2. If successful, MongoDB will send back a JWT Token in HttpOnly cookie!
       console.log("✅ Server says:", response.data.message);
-      localStorage.setItem("tradeverse_token", response.data.data.accessToken);
 
-      // 3. Teleport them to the secure dashboard
       navigate("/dashboard");
     } catch (err) {
       // If the backend rejects them (wrong password, etc.), catch the error and display it
@@ -104,7 +101,6 @@ export default function Login() {
             Enter Platform
           </button>
         </form>
-        {/* Paste this right below your </form> tag in Login.jsx! */}
         <p className="text-center text-sm text-gray-500 mt-6">
           Don't have an account?{" "}
           <Link
