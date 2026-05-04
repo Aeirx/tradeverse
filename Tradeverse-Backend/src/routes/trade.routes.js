@@ -1,10 +1,8 @@
 import { Router } from "express";
 import { verifyJWT } from "../middlewares/auth.middleware.js";
 import { createClient } from "redis";
-import YahooFinance from "yahoo-finance2";
+import axios from "axios";
 import { buyStock, sellStock, getPortfolio, getHistory } from "../controllers/trade.controller.js";
-
-const yahooFinance = new YahooFinance();
 // Initialize Redis client
 let redisClient;
 (async () => {
@@ -37,10 +35,11 @@ router.route("/price/:symbol").get(async (req, res) => {
       }
     }
 
-    // Fetch from Yahoo Finance API if cache miss
-    console.log(`Cache miss. Fetching ${symbol} from Yahoo Finance...`);
-    const quote = await yahooFinance.quote(symbol);
-    const livePrice = quote.regularMarketPrice;
+    // Fetch from Finnhub API if cache miss
+    console.log(`Cache miss. Fetching ${symbol} from Finnhub...`);
+    const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${process.env.FINNHUB_API_KEY}`);
+    const livePrice = response.data.c;
+    if (!livePrice) throw new Error("Could not fetch price");
 
     // Save to Redis cache and expire after 10 seconds
     if (redisClient && redisClient.isOpen) {
@@ -49,7 +48,7 @@ router.route("/price/:symbol").get(async (req, res) => {
 
     res.status(200).json({ price: livePrice });
   } catch (error) {
-    console.error("YAHOO FINANCE ERROR:", error);
+    console.error("FINNHUB ERROR:", error.message || error);
     res.status(500).json({ error: "Failed to fetch live market data." });
   }
 });

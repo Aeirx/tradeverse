@@ -4,9 +4,7 @@ import { ApiError } from "../utils/ApiError.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Transaction } from "../models/transaction.model.js";
-import YahooFinance from "yahoo-finance2";
-
-const yahooFinance = new YahooFinance();
+import axios from "axios";
 
 const buyStock = asyncHandler(async (req, res) => {
   const stockSymbol = (req.body.symbol || req.body.stockSymbol || "").toUpperCase();
@@ -19,9 +17,9 @@ const buyStock = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid trade quantity. Must be a positive integer.");
   }
 
-  // Fetch live price from Yahoo Finance
-  const quote = await yahooFinance.quote(stockSymbol);
-  const price = quote.regularMarketPrice;
+  // Fetch live price from Finnhub
+  const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
+  const price = response.data.c;
   if (!price) throw new ApiError(400, "Could not fetch live price for " + stockSymbol);
 
   const totalCost = quantity * price;
@@ -108,9 +106,9 @@ const sellStock = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid trade quantity. Must be a positive integer.");
   }
 
-  // Fetch live price from Yahoo Finance
-  const quote = await yahooFinance.quote(stockSymbol);
-  const price = quote.regularMarketPrice;
+  // Fetch live price from Finnhub
+  const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
+  const price = response.data.c;
   if (!price) throw new ApiError(400, "Could not fetch live price for " + stockSymbol);
 
   const earnings = sharesToSell * price;
