@@ -6,12 +6,18 @@ from transformers import pipeline
 
 print("Initializing Quant Ensemble Engine...")
 
-try:
-    print("Loading FinBERT Sentiment Engine...")
-    nlp_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
-except Exception as e:
-    print(f"Failed to load FinBERT: {e}")
-    nlp_pipeline = None
+# Lazy-load FinBERT to reduce startup memory pressure on free-tier hosts
+nlp_pipeline = None
+
+def get_nlp_pipeline():
+    global nlp_pipeline
+    if nlp_pipeline is None:
+        try:
+            print("Loading FinBERT Sentiment Engine...")
+            nlp_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+        except Exception as e:
+            print(f"Failed to load FinBERT: {e}")
+    return nlp_pipeline
 
 
 def get_live_technicals(symbol):
@@ -108,10 +114,10 @@ def apply_fake_news_filter(headline, score):
 
 def get_finbert_sentiment(headline):
     """Score a single headline using FinBERT. Returns float in [-1.0, +1.0]."""
-    if not headline or nlp_pipeline is None:
+    if not headline or get_nlp_pipeline() is None:
         return 0.0
     try:
-        res = nlp_pipeline(headline[:512])[0]  # cap at 512 tokens
+        res = get_nlp_pipeline()(headline[:512])[0]  # cap at 512 tokens
         label = res['label']
         confidence = res['score']
 

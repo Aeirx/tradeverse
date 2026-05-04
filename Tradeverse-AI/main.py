@@ -19,8 +19,15 @@ print("🔌 Connecting to Pinecone Cloud...")
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index("tradeverse-news")
 
-print("🧠 Waking up the AI Language Model...")
-model = SentenceTransformer('all-MiniLM-L6-v2')
+# Lazy-load the model on first use to reduce startup memory pressure
+model = None
+
+def get_model():
+    global model
+    if model is None:
+        print("🧠 Waking up the AI Language Model...")
+        model = SentenceTransformer('all-MiniLM-L6-v2')
+    return model
 
 # -------------------------------------------------------
 # BACKGROUND NEWS REFRESH TASK (Fix #2)
@@ -52,7 +59,7 @@ async def refresh_news_loop():
             if headlines:
                 vectors_to_upload = []
                 for i, text in enumerate(headlines):
-                    vector_math = model.encode(text).tolist()
+                    vector_math = get_model().encode(text).tolist()
                     unique_id = f"news_{int(time.time())}_{i}"
                     vectors_to_upload.append({
                         "id": unique_id,
@@ -112,7 +119,7 @@ def health_check():
 @app.post("/search")
 def search_news(query: SearchQuery):
     print(f"📡 Received search request for: '{query.text}'")
-    query_vector = model.encode(query.text).tolist()
+    query_vector = get_model().encode(query.text).tolist()
     search_results = index.query(vector=query_vector, top_k=5, include_metadata=True)
     if not search_results['matches']:
         return {"error": "No matching news found in memory."}
@@ -143,7 +150,7 @@ def predict_trade_signal(request: TradeRequest):
 
     # --- FIX #1: Fetch top 5 headlines, average sentiment ---
     query_text = f"financial news and market updates for {request.symbol} stock earnings"
-    query_vector = model.encode(query_text).tolist()
+    query_vector = get_model().encode(query_text).tolist()
 
     search_results = index.query(
         vector=query_vector,
