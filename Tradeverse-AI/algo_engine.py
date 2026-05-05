@@ -222,10 +222,10 @@ def run_ensemble_model(symbol, weights, headlines=None):
     )
 
     # --- FIX #3: Stricter Signal Logic ---
-    # BUY: Score must be >= 0.25 AND at least one technical must confirm (not just sentiment alone)
-    # SELL: Score must be <= -0.25 AND sentiment must not be positive (no panic-selling on good news)
-    technicals_bullish   = (ma_score > 0) or (rsi_score > 0)
-    technicals_bearish   = (ma_score < 0) or (rsi_score < 0)
+    # BUY: Score must be >= 0.25 AND (at least one technical must confirm OR technicals are neutral due to API failure)
+    # SELL: Score must be <= -0.25 AND sentiment must not be positive
+    technicals_bullish   = (ma_score > 0) or (rsi_score > 0) or (ma_score == 0.0 and rsi_score == 0.0)
+    technicals_bearish   = (ma_score < 0) or (rsi_score < 0) or (ma_score == 0.0 and rsi_score == 0.0)
     sentiment_positive   = sent_score > 0
     sentiment_negative   = sent_score < 0
 
