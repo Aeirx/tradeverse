@@ -2,11 +2,22 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import re
+from transformers import pipeline
 
 print("Initializing Quant Ensemble Engine...")
 
-# Using a lightweight heuristic sentiment engine to prevent OOM on Render 512MB Free Tier
-# This replaces the heavy 450MB FinBERT model.
+# Lazy-load FinBERT to reduce startup memory pressure on free-tier hosts
+nlp_pipeline = None
+
+def get_nlp_pipeline():
+    global nlp_pipeline
+    if nlp_pipeline is None:
+        try:
+            print("Loading FinBERT Sentiment Engine...")
+            nlp_pipeline = pipeline("sentiment-analysis", model="ProsusAI/finbert")
+        except Exception as e:
+            print(f"Failed to load FinBERT: {e}")
+    return nlp_pipeline
 
 
 def get_live_technicals(symbol):
@@ -102,29 +113,26 @@ def apply_fake_news_filter(headline, score):
 
 
 def get_finbert_sentiment(headline):
-    """
-    Score a single headline using a lightweight heuristic (FinBERT-Lite).
-    Returns float in [-1.0, +1.0].
-    """
-    if not headline:
+    """Score a single headline using FinBERT. Returns float in [-1.0, +1.0]."""
+    if not headline or get_nlp_pipeline() is None:
         return 0.0
-        
-    headline_lower = headline.lower()
-    
-    positive_words = ['surge', 'soar', 'jump', 'exceed', 'record', 'high', 'upgrade', 'buy', 'positive', 'beat', 'strong', 'bullish', 'growth', 'profit']
-    negative_words = ['plunge', 'crash', 'drop', 'miss', 'low', 'downgrade', 'sell', 'negative', 'weak', 'bearish', 'lawsuit', 'investigation', 'loss', 'debt']
-    
-    pos_count = sum(1 for word in positive_words if word in headline_lower)
-    neg_count = sum(1 for word in negative_words if word in headline_lower)
-    
-    score = 0.0
-    if pos_count > neg_count:
-        score = min(0.3 + (pos_count * 0.2), 0.95)
-    elif neg_count > pos_count:
-        score = max(-0.3 - (neg_count * 0.2), -0.95)
-        
-    score = apply_fake_news_filter(headline, score)
-    return score
+    try:
+        res = get_nlp_pipeline()(headline[:512])[0]  # cap at 512 tokens
+        label = res['label']
+        confidence = res['score']
+
+        if label == 'positive':
+            score = confidence
+        elif label == 'negative':
+            score = -confidence
+        else:
+            score = 0.0
+
+        score = apply_fake_news_filter(headline, score)
+        return score
+    except Exception as e:
+        print(f"⚠️ FinBERT error on headline: {e}")
+        return 0.0
 
 
 # --- FIX #1: Accept a list of headlines and average the sentiment ---
@@ -214,10 +222,10 @@ def run_ensemble_model(symbol, weights, headlines=None):
     )
 
     # --- FIX #3: Stricter Signal Logic ---
-    # BUY: Score must be >= 0.25 AND (at least one technical must confirm OR technicals are neutral due to API failure)
-    # SELL: Score must be <= -0.25 AND sentiment must not be positive
-    technicals_bullish   = (ma_score > 0) or (rsi_score > 0) or (ma_score == 0.0 and rsi_score == 0.0)
-    technicals_bearish   = (ma_score < 0) or (rsi_score < 0) or (ma_score == 0.0 and rsi_score == 0.0)
+    # BUY: Score must be >= 0.25 AND at least one technical must confirm (not just sentiment alone)
+    # SELL: Score must be <= -0.25 AND sentiment must not be positive (no panic-selling on good news)
+    technicals_bullish   = (ma_score > 0) or (rsi_score > 0)
+    technicals_bearish   = (ma_score < 0) or (rsi_score < 0)
     sentiment_positive   = sent_score > 0
     sentiment_negative   = sent_score < 0
 
