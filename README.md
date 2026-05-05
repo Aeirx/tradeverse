@@ -1,3 +1,11 @@
+---
+title: Tradeverse AI
+emoji: 📈
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+---
 # Tradeverse AI
 
 Tradeverse AI is a full-stack simulated trading platform. It lets users manage a virtual wallet, buy and sell equities in a paper portfolio, view live market prices, and run an experimental decision engine that combines news sentiment, vector search, and technical indicators.
