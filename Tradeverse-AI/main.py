@@ -1,186 +1,351 @@
+"""
+Tradeverse-AI FastAPI app.
+
+Endpoints:
+  GET  /                — open health probe (HF Spaces / Render uses this)
+  GET  /warmup          — open, idempotent: forces lazy models to load
+  POST /search          — auth: needs X-API-Secret. Best-headline retrieval.
+  POST /api/predict     — auth: needs X-API-Secret. Full ensemble decision.
+
+Background:
+  - lifespan launches a single news-refresh loop that reuses one httpx
+    AsyncClient (#46), logs failures with logger.exception (#47), and
+    shouts louder after N consecutive failures.
+  - lifespan also spawns a model-warmup task so the first user request
+    after a cold boot doesn't wait 10+ s for FinBERT + MiniLM to load (#44).
+"""
+
 import os
 import asyncio
-from fastapi import FastAPI
+import logging
+import secrets
+import time
+
+import httpx
 from contextlib import asynccontextmanager
+from fastapi import FastAPI, Header, HTTPException, Depends
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from pinecone import Pinecone
 from fastapi.middleware.cors import CORSMiddleware
 from sentence_transformers import SentenceTransformer
 
-from algo_engine import run_ensemble_model
+import config
+from algo_engine import run_ensemble_model, get_nlp_pipeline
 
-# --- Load Keys ---
+# ---------------------------------------------------------------------------
+# Boot
+# ---------------------------------------------------------------------------
+
 load_dotenv()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("tradeverse-ai")
+
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+API_SECRET = os.getenv("API_SECRET")
 
-print("🔌 Connecting to Pinecone Cloud...")
+if not API_SECRET:
+    raise RuntimeError(
+        "API_SECRET env var is required. Set it to a long random string "
+        "and configure the same value as AI_SERVICE_SECRET on the backend."
+    )
+
+
+def require_api_secret(x_api_secret: str | None = Header(default=None, alias="X-API-Secret")):
+    if not x_api_secret or not secrets.compare_digest(x_api_secret, API_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Secret header.")
+    return True
+
+
+logger.info("🔌 Connecting to Pinecone Cloud...")
 pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index("tradeverse-news")
+index = pc.Index(config.PINECONE_INDEX_NAME)
 
-# Lazy-load the model on first use to reduce startup memory pressure
-model = None
+# Lazy model loader (warmed in lifespan) — see #44.
+_embedding_model = None
+_warmup_status = {"models_loaded": False, "loading": False}
+
 
 def get_model():
-    global model
-    if model is None:
-        print("🧠 Waking up the AI Language Model...")
-        model = SentenceTransformer('all-MiniLM-L6-v2')
-    return model
+    global _embedding_model
+    if _embedding_model is None:
+        logger.info("🧠 Loading embedding model (%s)...", config.EMBEDDING_MODEL)
+        _embedding_model = SentenceTransformer(config.EMBEDDING_MODEL)
+    return _embedding_model
 
-# -------------------------------------------------------
-# BACKGROUND NEWS REFRESH TASK (Fix #2)
-# Runs every 5 minutes inside the FastAPI server process.
-# No need to manually run bot_worker.py separately.
-# -------------------------------------------------------
-async def refresh_news_loop():
-    """Continuously refresh Pinecone with live market headlines every 5 minutes."""
-    import time
-    import httpx
 
-    CATEGORIES = ["general", "forex", "crypto", "merger"]
-    
+async def warmup_models():
+    """Pull both models into memory in the background. Idempotent."""
+    if _warmup_status["models_loaded"] or _warmup_status["loading"]:
+        return
+    _warmup_status["loading"] = True
+    try:
+        logger.info("🔥 Warming up models in background...")
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, get_model)
+        # Encode once to materialise the underlying torch graph.
+        await loop.run_in_executor(None, lambda: get_model().encode("warmup"))
+        await loop.run_in_executor(None, get_nlp_pipeline)
+        _warmup_status["models_loaded"] = True
+        logger.info("✅ Models warmed.")
+    except Exception:
+        logger.exception("Model warmup failed — will retry lazily on first request.")
+    finally:
+        _warmup_status["loading"] = False
+
+
+# ---------------------------------------------------------------------------
+# Symbol → company-name map for sharper Pinecone retrieval (#41).
+# ---------------------------------------------------------------------------
+
+SYMBOL_TO_NAME = {
+    "AAPL": "Apple",
+    "MSFT": "Microsoft",
+    "TSLA": "Tesla",
+    "NVDA": "Nvidia",
+    "AMZN": "Amazon",
+    "META": "Meta Platforms",
+    "GOOGL": "Alphabet Google",
+    "GOOG": "Alphabet Google",
+    "AMD": "Advanced Micro Devices",
+    "INTC": "Intel",
+    "NFLX": "Netflix",
+    "COIN": "Coinbase",
+    "SPY": "S&P 500",
+    "JPM": "JPMorgan Chase",
+    "WMT": "Walmart",
+    "XOM": "Exxon Mobil",
+    "JNJ": "Johnson & Johnson",
+    "BRK.B": "Berkshire Hathaway",
+    "UBER": "Uber",
+    "DIS": "Disney",
+    "BA": "Boeing",
+    "F": "Ford",
+}
+
+
+def build_pinecone_query(symbol: str) -> str:
+    """Build a richer retrieval query that includes the company name when known."""
+    company = SYMBOL_TO_NAME.get(symbol.upper())
+    if company:
+        return f"{company} ({symbol}) stock market news earnings recent"
+    return f"{symbol} stock market news earnings recent"
+
+
+# ---------------------------------------------------------------------------
+# News refresh loop (background) — single shared httpx client (#46),
+# proper logging (#47), and a failure counter that shouts after N misses.
+# ---------------------------------------------------------------------------
+
+
+async def refresh_news_loop(http_client: httpx.AsyncClient):
+    consecutive_failures = 0
+
     while True:
         try:
-            print("\n⏰ [AUTO-REFRESH] Fetching live headlines into Pinecone memory...")
-            headlines = []
+            logger.info("⏰ [AUTO-REFRESH] Fetching live headlines into Pinecone memory...")
+            headlines: list[str] = []
 
-            for category in CATEGORIES:
-                url = f"https://finnhub.io/api/v1/news?category={category}&token={FINNHUB_API_KEY}"
-                async with httpx.AsyncClient(timeout=10) as client:
-                    res = await client.get(url)
-                    if res.status_code == 200:
-                        articles = res.json()
-                        for article in articles[:5]:  # top 5 per category
-                            if article.get("headline"):
-                                headlines.append(article["headline"])
+            for category in config.NEWS_REFRESH_CATEGORIES:
+                url = (
+                    f"https://finnhub.io/api/v1/news?category={category}"
+                    f"&token={FINNHUB_API_KEY}"
+                )
+                res = await http_client.get(url)
+                res.raise_for_status()
+                articles = res.json()
+                for article in articles[: config.NEWS_REFRESH_PER_CATEGORY]:
+                    if article.get("headline"):
+                        headlines.append(article["headline"])
 
             if headlines:
-                vectors_to_upload = []
+                vectors = []
                 for i, text in enumerate(headlines):
-                    vector_math = get_model().encode(text).tolist()
-                    unique_id = f"news_{int(time.time())}_{i}"
-                    vectors_to_upload.append({
-                        "id": unique_id,
-                        "values": vector_math,
-                        "metadata": {"text": text, "type": "live_market_news"}
+                    vec = get_model().encode(text).tolist()
+                    vectors.append({
+                        "id": f"news_{int(time.time())}_{i}",
+                        "values": vec,
+                        "metadata": {"text": text, "type": "live_market_news"},
                     })
-                index.upsert(vectors=vectors_to_upload)
-                print(f"✅ [AUTO-REFRESH] Memorized {len(vectors_to_upload)} live headlines into Pinecone.")
+                index.upsert(vectors=vectors)
+                logger.info("✅ [AUTO-REFRESH] Memorized %d live headlines into Pinecone.", len(vectors))
             else:
-                print("⚠️ [AUTO-REFRESH] No headlines fetched this cycle.")
+                logger.warning("⚠️ [AUTO-REFRESH] No headlines fetched this cycle.")
 
-        except Exception as e:
-            print(f"⚠️ [AUTO-REFRESH] Error: {e}")
+            consecutive_failures = 0
+        except Exception:
+            consecutive_failures += 1
+            logger.exception("[AUTO-REFRESH] Cycle failed (consecutive failures: %d).", consecutive_failures)
+            if consecutive_failures >= config.NEWS_REFRESH_ALERT_AFTER_FAILURES:
+                logger.critical(
+                    "🚨 [AUTO-REFRESH] %d consecutive failures — Pinecone memory is going stale. "
+                    "Check Finnhub key/quota.",
+                    consecutive_failures,
+                )
 
-        # Wait 5 minutes before next refresh
-        await asyncio.sleep(300)
+        await asyncio.sleep(config.NEWS_REFRESH_INTERVAL_SECONDS)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start background news refresh when server boots."""
-    task = asyncio.create_task(refresh_news_loop())
-    print("🔄 Background news refresh loop started (every 5 min).")
-    yield
-    task.cancel()
+    # One reusable HTTP client for the lifetime of the process (#46).
+    http_client = httpx.AsyncClient(timeout=config.NEWS_REFRESH_HTTP_TIMEOUT_SECONDS)
+    refresh_task = asyncio.create_task(refresh_news_loop(http_client))
+    warmup_task = asyncio.create_task(warmup_models())
+    logger.info("🔄 Background news refresh loop started (every %ds).", config.NEWS_REFRESH_INTERVAL_SECONDS)
+    logger.info("🔥 Background model warmup scheduled.")
+    try:
+        yield
+    finally:
+        refresh_task.cancel()
+        warmup_task.cancel()
+        await http_client.aclose()
 
-# --- Initialize Server ---
+
 app = FastAPI(title="Tradeverse AI Brain", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("CORS_ORIGIN", "http://localhost:5173")],
+    allow_origins=[os.getenv("CORS_ORIGIN", "http://localhost:8000")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Request Models ---
+
+# ---------------------------------------------------------------------------
+# Request models
+# ---------------------------------------------------------------------------
+
+
 class SearchQuery(BaseModel):
     text: str
+
 
 class WeightConfig(BaseModel):
     sentiment: float
     ma: float
     rsi: float
 
+
 class TradeRequest(BaseModel):
     symbol: str
     weights: WeightConfig
 
-# --- ENDPOINTS ---
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
+
 
 @app.get("/")
 def health_check():
-    return {"status": "online", "message": "🧠 AI Brain is listening for signals!"}
-
-@app.post("/search")
-def search_news(query: SearchQuery):
-    print(f"📡 Received search request for: '{query.text}'")
-    query_vector = get_model().encode(query.text).tolist()
-    search_results = index.query(vector=query_vector, top_k=5, include_metadata=True)
-    if not search_results['matches']:
-        return {"error": "No matching news found in memory."}
-    best_match = search_results['matches'][0]
     return {
-        "query": query.text,
-        "best_headline": best_match['metadata']['text'],
-        "confidence_score": round(best_match['score'], 2)
+        "status": "online",
+        "models_loaded": _warmup_status["models_loaded"],
+        "models_loading": _warmup_status["loading"],
+        "message": "🧠 AI Brain is listening for signals!",
     }
 
-@app.post("/api/predict")
-def predict_trade_signal(request: TradeRequest):
-    print(f"\n🚀 AI Engine activated for {request.symbol}!")
 
-    # --- FIX #4: Normalize weights so they always sum to 1.0 ---
+@app.get("/warmup")
+async def warmup_endpoint():
+    """Idempotent. Useful for clients to pre-warm before the first prediction."""
+    await warmup_models()
+    return {
+        "models_loaded": _warmup_status["models_loaded"],
+        "models_loading": _warmup_status["loading"],
+    }
+
+
+@app.post("/search", dependencies=[Depends(require_api_secret)])
+def search_news(query: SearchQuery):
+    logger.info("📡 Received search request for: '%s'", query.text)
+    query_vector = get_model().encode(query.text).tolist()
+    search_results = index.query(vector=query_vector, top_k=config.PINECONE_TOP_K, include_metadata=True)
+    if not search_results["matches"]:
+        return {"error": "No matching news found in memory."}
+    best_match = search_results["matches"][0]
+    return {
+        "query": query.text,
+        "best_headline": best_match["metadata"]["text"],
+        "confidence_score": round(best_match["score"], 2),
+    }
+
+
+@app.post("/api/predict", dependencies=[Depends(require_api_secret)])
+def predict_trade_signal(request: TradeRequest):
+    symbol = request.symbol.upper()
+    logger.info("🚀 AI Engine activated for %s", symbol)
+
+    # Normalise user-supplied weights so they sum to 1.0 before passing them
+    # downstream. (Regime overrides may later replace them entirely.)
     raw_s = request.weights.sentiment
     raw_m = request.weights.ma
     raw_r = request.weights.rsi
     total = raw_s + raw_m + raw_r
     if total == 0:
-        total = 1  # avoid division by zero
+        total = 1
     normalized_weights = {
         "sentiment": raw_s / total,
         "ma": raw_m / total,
         "rsi": raw_r / total,
     }
-    print(f"⚖️  Normalized weights → Sentiment: {normalized_weights['sentiment']:.2f} | MA: {normalized_weights['ma']:.2f} | RSI: {normalized_weights['rsi']:.2f}")
+    logger.info(
+        "⚖️  Requested weights → Sentiment: %.2f | MA: %.2f | RSI: %.2f",
+        normalized_weights["sentiment"], normalized_weights["ma"], normalized_weights["rsi"],
+    )
 
-    # --- FIX #1: Fetch top 5 headlines, average sentiment ---
-    query_text = f"financial news and market updates for {request.symbol} stock earnings"
+    # Sharper retrieval query — includes company name when known (#41).
+    query_text = build_pinecone_query(symbol)
+    logger.info("🔎 Pinecone query: %s", query_text)
     query_vector = get_model().encode(query_text).tolist()
 
     search_results = index.query(
         vector=query_vector,
-        top_k=5,  # Was 1 — now reads 5 headlines for a robust average
-        include_metadata=True
+        top_k=config.PINECONE_TOP_K,
+        include_metadata=True,
     )
 
     headlines = []
-    if search_results['matches']:
-        for match in search_results['matches']:
-            text = match['metadata'].get('text', '')
+    if search_results["matches"]:
+        for match in search_results["matches"]:
+            text = match["metadata"].get("text", "")
             if text:
                 headlines.append(text)
-        print(f"📡 PINECONE MEMORY: Found {len(headlines)} headlines for sentiment averaging.")
+        logger.info("📡 PINECONE: Found %d headlines for sentiment averaging.", len(headlines))
     else:
-        print("📡 PINECONE MEMORY: No news found. Falling back to technicals only.")
+        logger.info("📡 PINECONE: No news found. Falling back to technicals only.")
 
-    # Pass all headlines to the engine (it will average them internally)
     decision_data = run_ensemble_model(
-        symbol=request.symbol,
+        symbol=symbol,
         weights=normalized_weights,
-        headlines=headlines  # Now a list, not a single string
+        headlines=headlines,
     )
 
     raw_signal = decision_data["signal"]
-    confidence = min(round(abs(decision_data["final_score"]) * 50 + 50.0, 1), 99.9)
+    final_score = decision_data["final_score"]
+
+    # Confidence — fixed (#40):
+    # - HOLD always reports 0% confidence (the old formula gave 50% on HOLD).
+    # - BUY/SELL: |score| × 100, capped at 99.9% so we never report certainty.
+    if "HOLD" in raw_signal.upper() or final_score == 0:
+        confidence = 0.0
+    else:
+        confidence = min(round(abs(final_score) * 100.0, 1), 99.9)
 
     return {
         "signal": raw_signal,
         "confidence": confidence,
-        "kelly_percentage": decision_data.get("kelly_percentage", 0.0),
-        "symbol": request.symbol
+        # Renamed from kelly_percentage — see config.py for the rationale.
+        "risk_pct": decision_data.get("risk_pct", 0.0),
+        "symbol": symbol,
+        "regime": decision_data.get("regime", "Neutral"),
+        "requested_weights": normalized_weights,
+        "effective_weights": decision_data.get("effective_weights", normalized_weights),
+        "models_loaded": _warmup_status["models_loaded"],
     }

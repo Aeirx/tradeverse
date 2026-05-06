@@ -1,6 +1,5 @@
 import { Bot } from "lucide-react";
-
-const ALL_TARGETS = ["AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "META", "GOOGL", "AMD", "COIN"];
+import { ALL_TARGETS } from "../constants/markets";
 
 export default function BotControlPanel({
   isBotActive,

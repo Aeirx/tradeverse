@@ -1,5 +1,6 @@
 import { v2 as cloudinary } from "cloudinary";
 import fs from "fs";
+import { logger } from "./logger.js";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -7,20 +8,25 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-const uploadOnCloudinary = async (localFilePath) => {
+const safeUnlink = (path) => {
   try {
-    if (!localFilePath) return null;
-    // upload the file on cloudinary
+    if (path) fs.unlinkSync(path);
+  } catch (err) {
+    logger.warn({ err, path }, "Failed to unlink temp upload file");
+  }
+};
+
+const uploadOnCloudinary = async (localFilePath) => {
+  if (!localFilePath) return null;
+  try {
     const response = await cloudinary.uploader.upload(localFilePath, {
       resource_type: "auto",
     });
-    // file has been uploaded successfull
-    // console.log("file is uploaded on cloudinary ", response.url);
-    fs.unlinkSync(localFilePath);
+    safeUnlink(localFilePath);
     return response;
   } catch (error) {
-    console.log("CLOUDINARY ERROR: ", error);
-    fs.unlinkSync(localFilePath); // remove the locally saved temporary file as the upload operation got failed
+    logger.error({ err: error }, "Cloudinary upload failed");
+    safeUnlink(localFilePath);
     return null;
   }
 };

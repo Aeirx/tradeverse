@@ -3,9 +3,24 @@ import { asyncHandler } from "../utils/asyncHandler.js";
 import jwt from "jsonwebtoken";
 import { User } from "../models/user.model.js";
 
+/**
+ * Extract a JWT from either an HttpOnly cookie (browser SPA) or an
+ * `Authorization: Bearer <token>` header (mobile / curl / server-to-server).
+ */
+const extractToken = (req) => {
+  if (req.cookies?.accessToken) return req.cookies.accessToken;
+
+  const authHeader = req.headers?.authorization || req.headers?.Authorization;
+  if (typeof authHeader === "string" && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.slice(7).trim();
+    if (token) return token;
+  }
+  return null;
+};
+
 export const verifyJWT = asyncHandler(async (req, _, next) => {
   try {
-    const token = req.cookies?.accessToken;
+    const token = extractToken(req);
 
     if (!token) {
       throw new ApiError(401, "Unauthorized request: No token found");

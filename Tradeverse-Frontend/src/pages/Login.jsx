@@ -2,30 +2,23 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Lock, Mail, AlertCircle } from "lucide-react";
 import { Link } from "react-router-dom";
-import axios from "axios";
+import { apiClient } from "../api/client";
+import { useAuth } from "../context/useAuth";
 
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const navigate = useNavigate();
+  const { markAuthenticated } = useAuth();
 
   const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
 
     try {
-      const response = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/v1/users/login`,
-        {
-          email: email,
-          password: password,
-        },
-      );
-
-      // 2. If successful, MongoDB will send back a JWT Token in HttpOnly cookie!
-      console.log("✅ Server says:", response.data.message);
-
+      await apiClient.post("/api/v1/users/login", { email, password });
+      markAuthenticated();
       navigate("/dashboard");
     } catch (err) {
       // If the backend rejects them (wrong password, etc.), catch the error and display it

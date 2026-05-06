@@ -1,0 +1,17 @@
+# Local-development Dockerfile for the AI service.
+#
+# Production deploy on Hugging Face Spaces uses the *root* Dockerfile
+# (port 7860, non-root user). This file exists for `docker run` from the
+# Tradeverse-AI directory or for self-hosted deployments that prefer
+# port 8001 to match the local-dev convention.
+#
+# Build:  docker build -f Dockerfile.local -t tradeverse-ai:local .
+# Run:    docker run --rm -p 8001:8001 --env-file .env tradeverse-ai:local
+
+FROM python:3.10-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+EXPOSE 8001
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]

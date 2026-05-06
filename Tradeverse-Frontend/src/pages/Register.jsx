@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
-import axios from "axios";
+import { apiClient } from "../api/client";
 
 export default function Register() {
   const navigate = useNavigate();
@@ -42,14 +42,14 @@ export default function Register() {
         data.append("avatar", avatar); // Attach the file
       }
 
-      await axios.post(`${import.meta.env.VITE_API_URL}/api/v1/users/register`, data, {
+      await apiClient.post("/api/v1/users/register", data, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
       // If successful, send them to the login page!
       navigate("/");
     } catch (err) {
-      setError(err.response?.data?.error || "Registration failed. Try again.");
+      setError(err.response?.data?.message || "Registration failed. Try again.");
     } finally {
       setLoading(false);
     }

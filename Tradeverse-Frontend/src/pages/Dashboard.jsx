@@ -1,9 +1,16 @@
-import { useState, useEffect, useRef } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { LogOut, TrendingUp, Activity, Server, Menu, Moon, Sun } from "lucide-react";
-import axios from "axios";
 
-// --- EXTRACTED COMPONENTS ---
+import { apiClient } from "../api/client";
+import { useAuth } from "../context/useAuth";
+import { useExecutionLog } from "../hooks/useExecutionLog";
+import { useWallet } from "../hooks/useWallet";
+import { useLivePrices } from "../hooks/useLivePrices";
+import { useAiHealth } from "../hooks/useAiHealth";
+import { useAlgoExecution } from "../hooks/useAlgoExecution";
+import { useBot } from "../hooks/useBot";
+
 import MarketSidebar from "../components/MarketSidebar";
 import AlgoWeightControls from "../components/AlgoWeightControls";
 import HoldingsTable from "../components/HoldingsTable";
@@ -11,286 +18,130 @@ import BotControlPanel from "../components/BotControlPanel";
 import ExecutionLog from "../components/ExecutionLog";
 import TradingPanel from "../components/TradingPanel";
 
-const ALL_TARGETS = ["AAPL", "MSFT", "TSLA", "NVDA", "AMZN", "META", "GOOGL", "AMD", "COIN"];
-
 export default function Dashboard() {
   const navigate = useNavigate();
+  const { markUnauthenticated } = useAuth();
 
-  // --- UI STATE ---
+  // --- UI state ---
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [activeSymbol, setActiveSymbol] = useState("TSLA");
   const [searchInput, setSearchInput] = useState("");
 
-  // --- AI ALGORITHM WEIGHTS ---
+  // --- Algorithm weights ---
   const [sentimentWeight, setSentimentWeight] = useState(0.5);
   const [rsiWeight, setRsiWeight] = useState(0.3);
   const [maWeight, setMaWeight] = useState(0.2);
+  const weights = useMemo(
+    () => ({ sentiment: sentimentWeight, rsi: rsiWeight, ma: maWeight }),
+    [sentimentWeight, rsiWeight, maWeight]
+  );
 
-  // --- EXECUTION LOG ---
-  const [logs, setLogs] = useState([
-    "> System initialized...",
-    "> Secure JWT Token verified.",
-    "> Awaiting algorithm execution command...",
-  ]);
-
-  // --- WALLET & TRADING STATE ---
-  const [balance, setBalance] = useState(null);
-  const [portfolio, setPortfolio] = useState([]);
-  const [portfolioLivePrices, setPortfolioLivePrices] = useState({});
+  // --- Manual trade quantity ---
   const [tradeQuantity, setTradeQuantity] = useState(1);
-  const [livePrice, setLivePrice] = useState(null);
 
-  // --- AUTO-PILOT BOT STATE ---
+  // --- Bot config ---
   const [isBotActive, setIsBotActive] = useState(false);
   const [botTargets, setBotTargets] = useState(["TSLA"]);
   const [stopLoss, setStopLoss] = useState(5);
   const [takeProfit, setTakeProfit] = useState(15);
   const [maxCapital, setMaxCapital] = useState(1000);
-  const botIntervalRef = useRef(null);
-  const portfolioRef = useRef(portfolio);
 
-  // Keep portfolioRef in sync with portfolio state
-  useEffect(() => { portfolioRef.current = portfolio; }, [portfolio]);
+  // --- Hook composition ---
+  const { logs, addLog } = useExecutionLog();
+  const { balance, portfolio, refresh: refreshWallet } = useWallet();
+  const aiHealth = useAiHealth();
 
-  const addLog = (msg) => setLogs((prev) => [...prev, msg]);
+  // Live prices for: active symbol + every holding + every bot target
+  const symbolSet = useMemo(() => {
+    const set = new Set();
+    if (activeSymbol) set.add(activeSymbol);
+    for (const h of portfolio || []) if (h.stockSymbol) set.add(h.stockSymbol);
+    for (const t of botTargets || []) set.add(t);
+    return Array.from(set);
+  }, [activeSymbol, portfolio, botTargets]);
+  const { prices: livePrices } = useLivePrices(symbolSet);
 
-  // --- FETCH BALANCE ON LOAD ---
-  useEffect(() => {
-    const fetchWalletBalance = async () => {
-      try {
-        const response = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
-        });
-        setBalance(response.data.walletBalance);
-        setPortfolio(response.data.portfolio);
-      } catch (error) {
-        console.error("Failed to fetch balance:", error);
-        setBalance(0);
-      }
-    };
-    fetchWalletBalance();
-  }, []);
+  const { buy, sell, runAlgorithm, lastSignal, isRunning: isAlgoRunning } = useAlgoExecution({
+    activeSymbol,
+    weights,
+    tradeQuantity,
+    addLog,
+    refreshWallet,
+  });
 
-  // --- FETCH LIVE PRICE WHEN SYMBOL CHANGES ---
-  useEffect(() => {
-    const fetchLivePrice = async () => {
-      try {
-        setLivePrice(null);
-        const response = await axios.get(
-          `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${activeSymbol}`
-        );
-        setLivePrice(response.data.price);
-      } catch (error) {
-        console.error("Failed to fetch live price", error);
-        setLivePrice("ERROR");
-      }
-    };
-    if (activeSymbol) fetchLivePrice();
-  }, [activeSymbol]);
-
-  // --- FETCH PORTFOLIO LIVE PRICES ---
-  useEffect(() => {
-    const fetchPortfolioPrices = async () => {
-      if (!portfolio || portfolio.length === 0) return;
-      try {
-        const promises = portfolio.map(async (stock) => {
-          if (!stock.stockSymbol) return null;
-          const res = await axios.get(
-            `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${stock.stockSymbol}`
-          );
-          return { symbol: stock.stockSymbol, price: res.data.price };
-        });
-        const results = await Promise.all(promises);
-        const newPrices = {};
-        results.forEach((item) => {
-          if (item) newPrices[item.symbol] = item.price;
-        });
-        setPortfolioLivePrices(newPrices);
-      } catch (e) {
-        console.error("Failed fetching portfolio live prices", e);
-      }
-    };
-    fetchPortfolioPrices();
-  }, [portfolio]);
-
-  // --- AUTO-PILOT BOT LOOP ---
-  useEffect(() => {
-    if (isBotActive) {
-      setTimeout(() => addLog("> 🤖 AUTO-PILOT ACTIVATED. Scanning targets..."), 0);
-      const runBotCycle = async () => {
-        const targets = botTargets.length > 0 ? botTargets : ALL_TARGETS;
-        for (const symbol of targets) {
-          addLog(`> 🔍 Scanning ${symbol}...`);
-          try {
-            const aiRes = await axios.post(`${import.meta.env.VITE_AI_URL}/api/predict`, {
-              symbol,
-              weights: { sentiment: sentimentWeight, rsi: rsiWeight, ma: maWeight },
-            });
-            const signal = aiRes.data.signal?.toUpperCase() || "";
-            const confidence = aiRes.data.confidence || 0;
-            addLog(`> 📊 ${symbol}: ${signal} (${confidence.toFixed(1)}% confidence)`);
-
-            if (signal.includes("BUY") && confidence > 65) {
-              const priceRes = await axios.get(
-                `${import.meta.env.VITE_API_URL}/api/v1/trades/price/${symbol}`
-              );
-              const lp = priceRes.data.price;
-              const qty = Math.max(1, Math.floor(maxCapital / lp));
-              addLog(`> 🟢 BOT EXECUTING BUY: ${qty} share(s) of ${symbol} @ $${Number(lp).toFixed(2)} (capital: $${maxCapital})`);
-              await axios.post(
-                `${import.meta.env.VITE_API_URL}/api/v1/trades/buy`,
-                { symbol, quantity: qty }
-              );
-              addLog(`> ✅ BUY ORDER FILLED: ${qty} share(s) of ${symbol}`);
-              const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
-              });
-              setBalance(refresh.data.walletBalance);
-              setPortfolio(refresh.data.portfolio);
-            } else if (signal.includes("SELL") && confidence > 65) {
-              const holding = (portfolioRef.current || []).find((s) => s.stockSymbol === symbol);
-              if (!holding || holding.quantity <= 0) {
-                addLog(`> ⏭️ ${symbol}: SELL signal — no shares held, skipping.`);
-              } else {
-                const sellQty = holding.quantity;
-                addLog(`> 🔴 BOT EXECUTING SELL: ${sellQty} share(s) of ${symbol}`);
-                await axios.post(
-                  `${import.meta.env.VITE_API_URL}/api/v1/trades/sell`,
-                  { symbol, quantity: sellQty }
-                );
-                addLog(`> ✅ SELL ORDER FILLED: ${sellQty} share(s) of ${symbol}`);
-                const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
-                });
-                setBalance(refresh.data.walletBalance);
-                setPortfolio(refresh.data.portfolio);
-              }
-            } else {
-              addLog(`> ⏸ ${symbol}: HOLD — signal below confidence threshold.`);
-            }
-          } catch (err) {
-            const status = err?.response?.status;
-            const serverMsg = err?.response?.data?.message || err?.response?.data?.error;
-            if (status === 400) {
-              addLog(`> 🚧 ${symbol}: ${serverMsg || "Trade rejected by broker."}`);
-            } else if (status === 500) {
-              addLog(`> 🔥 ${symbol}: Server error — ${serverMsg || "Internal error, try again."}`);
-            } else {
-              addLog(`> ⚠️ ${symbol}: Network/connection error — ${err.message}`);
-            }
-          }
-          await new Promise((r) => setTimeout(r, 1500));
-        }
-      };
-      runBotCycle();
-      botIntervalRef.current = setInterval(runBotCycle, 60000);
-    } else {
-      if (botIntervalRef.current) {
-        clearInterval(botIntervalRef.current);
-        botIntervalRef.current = null;
-        addLog("> ⏹ AUTO-PILOT DEACTIVATED.");
-      }
-    }
-    return () => {
-      if (botIntervalRef.current) clearInterval(botIntervalRef.current);
-    };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isBotActive, botTargets]);
+  useBot({
+    isActive: isBotActive,
+    targets: botTargets,
+    weights,
+    maxCapital,
+    stopLossPct: stopLoss,
+    takeProfitPct: takeProfit,
+    portfolio,
+    livePrices,
+    addLog,
+    refreshWallet,
+  });
 
   const toggleBotTarget = (sym) => {
-    setBotTargets((prev) =>
-      prev.includes(sym) ? prev.filter((s) => s !== sym) : [...prev, sym]
-    );
-    // Also switch the active trading panel to show this symbol
+    setBotTargets((prev) => (prev.includes(sym) ? prev.filter((s) => s !== sym) : [...prev, sym]));
     setActiveSymbol(sym);
   };
 
-  // --- LOGOUT ---
   const handleLogout = async () => {
     try {
-      await axios.post(`${import.meta.env.VITE_API_URL}/api/v1/users/logout`);
+      await apiClient.post("/api/v1/users/logout");
     } finally {
+      markUnauthenticated();
       navigate("/");
     }
   };
 
-  // --- MANUAL ALGORITHM EXECUTION ---
-  const handleRunAlgorithm = async () => {
-    addLog(`> Initiating sequence for ${activeSymbol}...`);
-    addLog(`> Weights: Sentiment(${sentimentWeight}), RSI(${rsiWeight}), MA(${maWeight})`);
-    try {
-      const response = await axios.post(`${import.meta.env.VITE_AI_URL}/api/predict`, {
-        symbol: activeSymbol,
-        weights: { sentiment: sentimentWeight, rsi: rsiWeight, ma: maWeight },
-      });
-      const signal = response.data.signal.toUpperCase();
-      const confidence = response.data.confidence;
-      addLog(`> AI Analysis Complete.`);
-      addLog(`> SIGNAL: ${signal} (Confidence: ${confidence}%)`);
+  const aggregateValue = useMemo(
+    () =>
+      (portfolio || []).reduce((total, stock) => {
+        const lp = livePrices[stock.stockSymbol];
+        if (lp && stock.quantity) return total + Number(lp) * Number(stock.quantity);
+        return total;
+      }, 0),
+    [portfolio, livePrices]
+  );
 
-      if (signal.includes("BUY")) {
-        addLog(`> 🤖 BOT OVERRIDE: Automatically executing BUY order...`);
-        await handleBuyStock();
-      } else if (signal.includes("SELL")) {
-        addLog(`> 🤖 BOT OVERRIDE: Automatically executing SELL order...`);
-        await handleSellStock();
-      } else {
-        addLog(`> 🤖 BOT STANDING BY: No favorable trade setup found.`);
-      }
-    } catch (error) {
-      addLog(`> ERROR: Connection to AI Engine failed.`);
-      console.error(error);
-    }
-  };
+  // --- Status card values (real state, not hardcoded — #26) ---
+  const aiStatusLabel =
+    aiHealth.status === "online" ? "Connected" : aiHealth.status === "checking" ? "Checking..." : "Offline";
+  const currentSignalLabel = isAlgoRunning
+    ? "Asking AI..."
+    : lastSignal
+      ? `${lastSignal.symbol} ${lastSignal.signal} (${lastSignal.confidence}%)`
+      : "Awaiting execution...";
 
-  // --- BUY ---
-  const handleBuyStock = async () => {
-    try {
-      addLog(`> Executing BUY order for ${tradeQuantity} shares of ${activeSymbol}...`);
-      const response = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/v1/trades/buy`,
-        { symbol: activeSymbol, quantity: tradeQuantity }
-      );
-      setBalance(response.data.data.walletBalance);
-      addLog(`> SUCCESS: ${response.data.message}`);
-      const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
-      });
-      setPortfolio(refresh.data.portfolio);
-    } catch (error) {
-      addLog(`> ORDER REJECTED: ${error.response?.data?.message || error.response?.data?.error || "Network error."}`);
-    }
-  };
+  const statusCards = [
+    {
+      icon: <Activity className="h-5 w-5 text-blue-500" />,
+      label: "Live Market Status",
+      value: `Tracking ${activeSymbol}...`,
+    },
+    {
+      icon: <Server className={`h-5 w-5 ${aiHealth.status === "online" ? "text-green-500" : "text-red-500"}`} />,
+      label: "Analysis Engine Status",
+      value: aiStatusLabel,
+    },
+    {
+      icon: <TrendingUp className="h-5 w-5 text-gray-400" />,
+      label: "Current Signal",
+      value: currentSignalLabel,
+    },
+  ];
 
-  // --- SELL ---
-  const handleSellStock = async () => {
-    try {
-      addLog(`> Executing SELL order for ${tradeQuantity} shares of ${activeSymbol}...`);
-      const response = await axios.post(
-        `${import.meta.env.VITE_API_URL}/api/v1/trades/sell`,
-        { symbol: activeSymbol, quantity: tradeQuantity }
-      );
-      addLog(`> SUCCESS: ${response.data.message}`);
-      const refresh = await axios.get(`${import.meta.env.VITE_API_URL}/api/v1/users/balance`, {
-      });
-      setBalance(refresh.data.walletBalance);
-      setPortfolio(refresh.data.portfolio);
-    } catch (error) {
-      addLog(`> ORDER REJECTED: ${error.response?.data?.message || error.response?.data?.error || "Network error."}`);
-    }
-  };
+  const livePrice = livePrices[activeSymbol] ?? null;
 
-  // --- PORTFOLIO CALCULATIONS ---
-  const aggregateValue = portfolio.reduce((total, stock) => {
-    const lp = portfolioLivePrices[stock.stockSymbol];
-    if (lp && stock.quantity) return total + Number(lp) * Number(stock.quantity);
-    return total;
-  }, 0);
-
-  // ============================================================
-  // RENDER
-  // ============================================================
   return (
-    <div className={`min-h-screen flex flex-col relative overflow-hidden transition-colors duration-300 ${isDarkMode ? "dark bg-slate-950 text-gray-100" : "bg-gray-50 text-gray-800"}`}>
-
-      {/* SIDEBAR */}
+    <div
+      className={`min-h-screen flex flex-col relative overflow-hidden transition-colors duration-300 ${
+        isDarkMode ? "dark bg-slate-950 text-gray-100" : "bg-gray-50 text-gray-800"
+      }`}
+    >
       <MarketSidebar
         isDarkMode={isDarkMode}
         isSidebarOpen={isSidebarOpen}
@@ -301,12 +152,19 @@ export default function Dashboard() {
         setSearchInput={setSearchInput}
       />
 
-      {/* TOP NAV */}
-      <nav className={`px-6 py-4 flex flex-wrap justify-between items-center z-10 gap-y-4 border-b ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-200"}`}>
+      <nav
+        className={`px-6 py-4 flex flex-wrap justify-between items-center z-10 gap-y-4 border-b ${
+          isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-200"
+        }`}
+      >
         <div className="flex items-center gap-4">
           <button
             onClick={() => setIsSidebarOpen(true)}
-            className={`p-2 -ml-2 rounded-lg transition-colors ${isDarkMode ? "text-gray-400 hover:text-gray-100 hover:bg-slate-700" : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"}`}
+            className={`p-2 -ml-2 rounded-lg transition-colors ${
+              isDarkMode
+                ? "text-gray-400 hover:text-gray-100 hover:bg-slate-700"
+                : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+            }`}
           >
             <Menu className="h-6 w-6" />
           </button>
@@ -316,7 +174,11 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className={`hidden md:flex items-center gap-3 px-4 py-2 rounded-lg border shadow-sm ml-4 ${isDarkMode ? "bg-green-900/30 border-green-800/50" : "bg-green-50 border-green-200"}`}>
+        <div
+          className={`hidden md:flex items-center gap-3 px-4 py-2 rounded-lg border shadow-sm ml-4 ${
+            isDarkMode ? "bg-green-900/30 border-green-800/50" : "bg-green-50 border-green-200"
+          }`}
+        >
           <span className="text-sm font-semibold text-green-600 uppercase tracking-wider">Buying Power</span>
           <span className={`font-bold text-lg ${isDarkMode ? "text-green-400" : "text-green-800"}`}>
             {balance !== null ? `$${Number(balance).toLocaleString()}` : "Loading..."}
@@ -326,30 +188,34 @@ export default function Dashboard() {
         <div className="flex items-center gap-3">
           <button
             onClick={() => setIsDarkMode((prev) => !prev)}
-            className={`flex items-center justify-center p-2 rounded-full border transition-colors focus:outline-none ${isDarkMode ? "bg-slate-700 border-slate-600 text-yellow-400 hover:bg-slate-600" : "bg-gray-100 border-gray-200 text-indigo-500 hover:bg-gray-200"}`}
+            className={`flex items-center justify-center p-2 rounded-full border transition-colors focus:outline-none ${
+              isDarkMode
+                ? "bg-slate-700 border-slate-600 text-yellow-400 hover:bg-slate-600"
+                : "bg-gray-100 border-gray-200 text-indigo-500 hover:bg-gray-200"
+            }`}
           >
             {isDarkMode ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
           </button>
           <button
             onClick={handleLogout}
-            className={`flex items-center gap-2 text-sm font-medium transition-colors hover:text-red-500 ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
+            className={`flex items-center gap-2 text-sm font-medium transition-colors hover:text-red-500 ${
+              isDarkMode ? "text-gray-400" : "text-gray-600"
+            }`}
           >
             <LogOut className="h-4 w-4" /> Disconnect
           </button>
         </div>
       </nav>
 
-      {/* MAIN CONTENT */}
       <main className="flex-1 p-6 max-w-7xl mx-auto w-full">
-
-        {/* STATUS CARDS */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
-          {[
-            { icon: <Activity className="h-5 w-5 text-blue-500" />, label: "Live Market Status", value: `Tracking ${activeSymbol}...` },
-            { icon: <Server className="h-5 w-5 text-purple-500" />, label: "Analysis Engine Status", value: "Connected" },
-            { icon: <TrendingUp className="h-5 w-5 text-gray-400" />, label: "Current Signal", value: "Awaiting execution..." },
-          ].map((card, i) => (
-            <div key={i} className={`p-6 rounded-xl border shadow-sm ${isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"}`}>
+          {statusCards.map((card, i) => (
+            <div
+              key={i}
+              className={`p-6 rounded-xl border shadow-sm ${
+                isDarkMode ? "bg-slate-900 border-slate-700" : "bg-white border-gray-100"
+              }`}
+            >
               <div className={`flex items-center gap-3 mb-2 ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}>
                 {card.icon}
                 <h2 className="font-semibold">{card.label}</h2>
@@ -359,7 +225,22 @@ export default function Dashboard() {
           ))}
         </div>
 
-        {/* ALGO WEIGHTS + HOLDINGS */}
+        {/* Surface regime override + effective weights (#13) */}
+        {lastSignal?.effectiveWeights && (
+          <div
+            className={`p-3 mb-6 rounded-lg text-xs font-mono border ${
+              isDarkMode ? "bg-slate-900 border-slate-700 text-gray-300" : "bg-white border-gray-200 text-gray-700"
+            }`}
+          >
+            <strong>Last AI run:</strong> regime <span className="text-blue-500">{lastSignal.regime}</span>{" "}
+            • effective weights → Sentiment {lastSignal.effectiveWeights.sentiment} • MA {lastSignal.effectiveWeights.ma}{" "}
+            • RSI {lastSignal.effectiveWeights.rsi} • risk {lastSignal.riskPct}%{" "}
+            {lastSignal.elapsedMs != null && (
+              <span className="opacity-60">• {(lastSignal.elapsedMs / 1000).toFixed(1)}s</span>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
           <AlgoWeightControls
             isDarkMode={isDarkMode}
@@ -369,17 +250,17 @@ export default function Dashboard() {
             setRsiWeight={setRsiWeight}
             maWeight={maWeight}
             setMaWeight={setMaWeight}
-            onExecute={handleRunAlgorithm}
+            onExecute={runAlgorithm}
+            isRunning={isAlgoRunning}
           />
           <HoldingsTable
             isDarkMode={isDarkMode}
             portfolio={portfolio}
-            portfolioLivePrices={portfolioLivePrices}
+            portfolioLivePrices={livePrices}
             aggregateValue={aggregateValue}
           />
         </div>
 
-        {/* AUTO-PILOT BOT */}
         <BotControlPanel
           isBotActive={isBotActive}
           setIsBotActive={setIsBotActive}
@@ -393,20 +274,17 @@ export default function Dashboard() {
           setTakeProfit={setTakeProfit}
         />
 
-        {/* EXECUTION LOG */}
         <ExecutionLog logs={logs} />
 
-        {/* TRADING CHART + BUY/SELL */}
         <TradingPanel
           isDarkMode={isDarkMode}
           activeSymbol={activeSymbol}
           livePrice={livePrice}
           tradeQuantity={tradeQuantity}
           setTradeQuantity={setTradeQuantity}
-          onBuy={handleBuyStock}
-          onSell={handleSellStock}
+          onBuy={buy}
+          onSell={sell}
         />
-
       </main>
     </div>
   );

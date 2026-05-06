@@ -9,6 +9,7 @@ export default function AlgoWeightControls({
   maWeight,
   setMaWeight,
   onExecute,
+  isRunning = false,
 }) {
   const weights = [
     { label: "News Sentiment (Pinecone)", value: sentimentWeight, setter: setSentimentWeight, color: "text-green-500", accent: "accent-green-500" },
@@ -39,9 +40,11 @@ export default function AlgoWeightControls({
       </div>
       <button
         onClick={onExecute}
-        className="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md"
+        disabled={isRunning}
+        className="w-full mt-8 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-colors shadow-md disabled:opacity-60 disabled:cursor-wait"
       >
-        <Zap className="h-5 w-5 text-yellow-400" /> Execute Strategy
+        <Zap className={`h-5 w-5 text-yellow-400 ${isRunning ? "animate-pulse" : ""}`} />
+        {isRunning ? "Asking AI..." : "Execute Strategy"}
       </button>
     </div>
   );

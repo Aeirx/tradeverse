@@ -12,3 +12,10 @@ __pycache__/
 
 # OS Files
 .DS_Store
+
+# Editor / tool metadata
+.claude/
+.pytest_cache/
+
+# Generated data files (regenerate via Tradeverse-AI/scripts/data_loader.py)
+*.csv

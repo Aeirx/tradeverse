@@ -11,3 +11,6 @@ numpy
 transformers
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch
+
+# Test deps (kept here so the same image used in CI runs the test suite).
+pytest

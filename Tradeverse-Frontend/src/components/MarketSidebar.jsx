@@ -1,19 +1,5 @@
 import { TrendingUp, X, Search } from "lucide-react";
-
-const POPULAR_STOCKS = [
-  { symbol: "AAPL", name: "Apple Inc." },
-  { symbol: "MSFT", name: "Microsoft Corp." },
-  { symbol: "TSLA", name: "Tesla Inc." },
-  { symbol: "NVDA", name: "NVIDIA Corp." },
-  { symbol: "AMZN", name: "Amazon.com Inc." },
-  { symbol: "META", name: "Meta Platforms" },
-  { symbol: "GOOGL", name: "Alphabet Inc." },
-  { symbol: "NFLX", name: "Netflix Inc." },
-  { symbol: "AMD", name: "Advanced Micro Devices" },
-  { symbol: "INTC", name: "Intel Corp." },
-  { symbol: "COIN", name: "Coinbase Global" },
-  { symbol: "SPY", name: "S&P 500 ETF Trust" },
-];
+import { POPULAR_STOCKS } from "../constants/markets";
 
 export default function MarketSidebar({
   isDarkMode,

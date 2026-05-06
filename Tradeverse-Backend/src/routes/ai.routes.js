@@ -1,9 +1,17 @@
 import { Router } from "express";
-import { getAiInsight } from "../controllers/ai.controller.js";
+import { verifyJWT } from "../middlewares/auth.middleware.js";
+import {
+  getAiInsight,
+  proxyPredict,
+  checkAiHealth,
+} from "../controllers/ai.controller.js";
 
 const router = Router();
 
-// This will be triggered when someone hits POST /api/v1/ai/ask
-router.route("/ask").post(getAiInsight);
+// All AI routes require an authenticated user; the backend then forwards the
+// request to FastAPI with a service-level shared secret.
+router.route("/ask").post(verifyJWT, getAiInsight);
+router.route("/predict").post(verifyJWT, proxyPredict);
+router.route("/health").get(verifyJWT, checkAiHealth);
 
 export default router;

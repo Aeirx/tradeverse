@@ -5,10 +5,11 @@ import { ApiResponse } from "../utils/ApiResponse.js";
 import { asyncHandler } from "../utils/asyncHandler.js";
 import { Transaction } from "../models/transaction.model.js";
 import axios from "axios";
+import { logger } from "../utils/logger.js";
 
 const buyStock = asyncHandler(async (req, res) => {
   const stockSymbol = (req.body.symbol || req.body.stockSymbol || "").toUpperCase();
-  if (!stockSymbol || !/^[A-Z]+$/.test(stockSymbol)) {
+  if (!stockSymbol || !/^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(stockSymbol)) {
     throw new ApiError(400, "Invalid stock symbol format.");
   }
 
@@ -17,11 +18,11 @@ const buyStock = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid trade quantity. Must be a positive integer.");
   }
 
-  // Fetch live price from Finnhub
+  // Fetch live price from Finnhub — fail closed if unavailable
   const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
-  let price = response.data.c;
+  const price = response.data.c;
   if (!price) {
-    price = 150.0; // Fallback for unsupported symbols
+    throw new ApiError(503, `Live price unavailable for ${stockSymbol}. Trade cannot be executed without a verified price.`);
   }
 
   const totalCost = quantity * price;
@@ -91,7 +92,8 @@ const buyStock = asyncHandler(async (req, res) => {
       );
   } catch (error) {
     await session.abortTransaction();
-    throw new ApiError(error.statusCode || 400, error.message || "Transaction failed. Please try again.");
+    logger.error({ err: error, userId: req.user?._id?.toString() }, "BUY transaction error");
+    throw new ApiError(error.statusCode || 500, error.message || "Transaction failed. Please try again.");
   } finally {
     session.endSession();
   }
@@ -99,7 +101,7 @@ const buyStock = asyncHandler(async (req, res) => {
 
 const sellStock = asyncHandler(async (req, res) => {
   const stockSymbol = (req.body.symbol || req.body.stockSymbol || "").toUpperCase();
-  if (!stockSymbol || !/^[A-Z]+$/.test(stockSymbol)) {
+  if (!stockSymbol || !/^[A-Z]{1,5}([.\-][A-Z]{1,2})?$/.test(stockSymbol)) {
     throw new ApiError(400, "Invalid stock symbol format.");
   }
 
@@ -108,11 +110,11 @@ const sellStock = asyncHandler(async (req, res) => {
     throw new ApiError(400, "Invalid trade quantity. Must be a positive integer.");
   }
 
-  // Fetch live price from Finnhub
+  // Fetch live price from Finnhub — fail closed if unavailable
   const response = await axios.get(`https://finnhub.io/api/v1/quote?symbol=${stockSymbol}&token=${process.env.FINNHUB_API_KEY}`);
-  let price = response.data.c;
+  const price = response.data.c;
   if (!price) {
-    price = 150.0; // Fallback for unsupported symbols
+    throw new ApiError(503, `Live price unavailable for ${stockSymbol}. Trade cannot be executed without a verified price.`);
   }
 
   const earnings = sharesToSell * price;
@@ -182,7 +184,8 @@ const sellStock = asyncHandler(async (req, res) => {
       );
   } catch (error) {
     await session.abortTransaction();
-    throw new ApiError(error.statusCode || 400, error.message || "Transaction failed. Please try again.");
+    logger.error({ err: error, userId: req.user?._id?.toString() }, "SELL transaction error");
+    throw new ApiError(error.statusCode || 500, error.message || "Transaction failed. Please try again.");
   } finally {
     session.endSession();
   }
@@ -197,7 +200,7 @@ const getPortfolio = asyncHandler(async (req, res) => {
   let totalInvestedValue = 0;
   user.portfolio.forEach((stock) => {
     if (stock.stockSymbol) {
-      totalInvestedValue += (stock.quantity || 0) * (stock.averagePrice || 150);
+      totalInvestedValue += (stock.quantity ?? 0) * (stock.averagePrice ?? 0);
     }
   });
 
@@ -215,13 +218,39 @@ const getPortfolio = asyncHandler(async (req, res) => {
   );
 });
 
+const MAX_HISTORY_LIMIT = 200;
+
 const getHistory = asyncHandler(async (req, res) => {
-  const transactions = await Transaction.find({ user: req.user._id }).sort({
-    createdAt: -1,
-  });
-  return res
-    .status(200)
-    .json(new ApiResponse(200, transactions, "History fetched"));
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(
+    MAX_HISTORY_LIMIT,
+    Math.max(1, parseInt(req.query.limit, 10) || 50)
+  );
+  const skip = (page - 1) * limit;
+
+  const [transactions, total] = await Promise.all([
+    Transaction.find({ user: req.user._id })
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limit),
+    Transaction.countDocuments({ user: req.user._id }),
+  ]);
+
+  return res.status(200).json(
+    new ApiResponse(
+      200,
+      {
+        transactions,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      "History fetched"
+    )
+  );
 });
 
 export { buyStock, sellStock, getPortfolio, getHistory };

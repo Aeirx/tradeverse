@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => {
 
   return {
     session,
-    quote: vi.fn(),
+    axiosGet: vi.fn(),
     updateOne: vi.fn(),
     transactionCreate: vi.fn(),
     transactionFind: vi.fn(),
@@ -25,12 +25,12 @@ vi.mock("mongoose", () => ({
   },
 }));
 
-vi.mock("yahoo-finance2", () => ({
-  default: vi.fn(function YahooFinanceMock() {
-    return {
-      quote: mocks.quote,
-    };
-  }),
+// The trade controller uses axios.get to hit Finnhub for live prices.
+// Mock it so tests don't need a real API key (and don't make network calls).
+vi.mock("axios", () => ({
+  default: {
+    get: (...args) => mocks.axiosGet(...args),
+  },
 }));
 
 vi.mock("../src/models/user.model.js", () => ({
@@ -49,8 +49,13 @@ vi.mock("../src/models/user.model.js", () => ({
 vi.mock("../src/models/transaction.model.js", () => ({
   Transaction: {
     create: (...args) => mocks.transactionCreate(...args),
+    countDocuments: vi.fn(() => Promise.resolve(mocks.history.length)),
     find: vi.fn(() => ({
-      sort: vi.fn(() => Promise.resolve(mocks.history)),
+      sort: vi.fn(() => ({
+        skip: vi.fn(() => ({
+          limit: vi.fn(() => Promise.resolve(mocks.history)),
+        })),
+      })),
     })),
   },
 }));
@@ -74,9 +79,10 @@ const createResponse = () => {
   return res;
 };
 
-const runController = async (controller, body = {}) => {
+const runController = async (controller, body = {}, query = {}) => {
   const req = {
     body,
+    query,
     user: { _id: "user-1" },
   };
   const res = createResponse();
@@ -124,7 +130,8 @@ beforeEach(() => {
     portfolio: [],
   };
   mocks.history = [];
-  mocks.quote.mockResolvedValue({ regularMarketPrice: 150 });
+  // Finnhub /quote response shape: { c: <current price>, ... }
+  mocks.axiosGet.mockResolvedValue({ data: { c: 150 } });
   mocks.updateOne.mockImplementation((query, update) => {
     applyUserUpdate(query, update);
     return Promise.resolve({ acknowledged: true });
@@ -262,6 +269,12 @@ describe("trade controller", () => {
     const { res, next } = await runController(getHistory);
 
     expect(next).not.toHaveBeenCalled();
-    expect(res.body.data).toEqual(mocks.history);
+    expect(res.body.data.transactions).toEqual(mocks.history);
+    expect(res.body.data.pagination).toMatchObject({
+      page: 1,
+      limit: 50,
+      total: 1,
+      totalPages: 1,
+    });
   });
 });
