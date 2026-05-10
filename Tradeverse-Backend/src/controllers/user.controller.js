@@ -8,8 +8,8 @@ import jwt from "jsonwebtoken";
 
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
-  sameSite: "lax",
+  secure: true, // Required for sameSite "none"
+  sameSite: "none", // Required for cross-origin (Vercel to Render)
   maxAge: 24 * 60 * 60 * 1000, // 1 day (matches access token expiry)
   path: "/",
 };
