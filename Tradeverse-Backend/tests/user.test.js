@@ -188,7 +188,13 @@ describe("loginUser", () => {
     expect(res.statusCode).toBe(200);
     expect(res.cookies.accessToken).toEqual({
       value: "access-token-stub",
-      opts: expect.objectContaining({ httpOnly: true, sameSite: "lax" }),
+      opts: expect.objectContaining({
+        httpOnly: true,
+        // sameSite "none" + secure is required for cross-origin cookies
+        // (Vercel frontend → Render backend).
+        sameSite: "none",
+        secure: true,
+      }),
     });
     expect(res.cookies.refreshToken.value).toBe("refresh-token-stub");
   });

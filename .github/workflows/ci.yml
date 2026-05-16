@@ -1,0 +1,135 @@
+name: CI
+
+# Triggers:
+#   - push to main: gates direct commits to the protected branch
+#   - pull_request: runs on every PR commit, regardless of target branch
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel any in-progress run on the same ref when a new commit lands —
+# saves CI minutes when you push corrections quickly.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Read-only by default. Jobs that need more should opt in explicitly.
+permissions:
+  contents: read
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Backend: Express + Mongoose + Vitest
+  # ---------------------------------------------------------------------------
+  backend:
+    name: Backend (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Tradeverse-Backend
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: Tradeverse-Backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        env:
+          # The user.controller tests set these themselves, but exporting
+          # explicit defaults here means a future suite that touches the
+          # JWT helpers without setting env doesn't fail mysteriously.
+          ACCESS_TOKEN_SECRET: ci-access-secret
+          REFRESH_TOKEN_SECRET: ci-refresh-secret
+          ACCESS_TOKEN_EXPIRY: 1d
+          REFRESH_TOKEN_EXPIRY: 10d
+          NODE_ENV: test
+
+  # ---------------------------------------------------------------------------
+  # Frontend: React + Vite — lint, typecheck-via-build, vitest
+  # ---------------------------------------------------------------------------
+  frontend:
+    name: Frontend (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Tradeverse-Frontend
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["20"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: Tradeverse-Frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test (vitest)
+        # `--passWithNoTests` so the job stays green while we backfill component
+        # tests; remove the flag once at least one real test exists.
+        run: npx vitest run --pool=threads --passWithNoTests
+
+      - name: Build
+        run: npm run build
+        env:
+          # Build-time public env. Real values are injected at deploy on
+          # Vercel; CI just needs *something* so import.meta.env resolves.
+          VITE_API_URL: https://api.example.invalid
+
+  # ---------------------------------------------------------------------------
+  # AI service: FastAPI + algo_engine pytest suite
+  # ---------------------------------------------------------------------------
+  ai:
+    name: AI service (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: Tradeverse-AI
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: Tradeverse-AI/requirements.txt
+
+      - name: Install minimal test deps
+        # tests/conftest.py installs sys.modules stubs for yfinance and
+        # transformers before algo_engine is imported, so we can run the
+        # suite without the heavy ML stack — just numpy + pytest. Keeps
+        # this job under 30s instead of installing 1+ GB of torch wheels.
+        run: pip install numpy pytest
+
+      - name: Run pytest
+        run: pytest tests/ -v

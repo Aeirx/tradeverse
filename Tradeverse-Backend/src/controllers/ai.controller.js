@@ -49,9 +49,18 @@ const getAiInsight = asyncHandler(async (req, res) => {
   }
 });
 
-const checkAiHealth = asyncHandler(async (req, res) => {
+const checkAiHealth = asyncHandler(async (_req, res) => {
   try {
-    const aiResponse = await axios.get(`${AI_SERVICE_URL}/`, { timeout: 5_000 });
+    const aiResponse = await axios.get(`${AI_SERVICE_URL}/`, { timeout: 8_000 });
+    // Fire-and-forget warmup. /warmup is idempotent — if the AI service is
+    // freshly cold-booted, this kicks the lazy model loaders into the
+    // background so the first real /predict call doesn't have to wait
+    // ~10–15 s for FinBERT + MiniLM to load.
+    axios
+      .get(`${AI_SERVICE_URL}/warmup`, { timeout: 3_000 })
+      .catch((warmupErr) =>
+        logger.debug({ err: warmupErr?.message }, "Best-effort warmup ping failed")
+      );
     return res
       .status(200)
       .json(new ApiResponse(200, { online: true, upstream: aiResponse.data }, "AI online."));
@@ -90,13 +99,27 @@ const proxyPredict = asyncHandler(async (req, res) => {
     const aiResponse = await axios.post(
       `${AI_SERVICE_URL}/api/predict`,
       { symbol: symbol.toUpperCase(), weights },
-      { headers: aiHeaders(), timeout: 60_000 }
+      // 90 s gives HF Spaces enough room to wake from sleep (typically 30–60 s)
+      // while still leaving Render's ~100 s proxy timeout some headroom so our
+      // own descriptive 502 reaches the client instead of Render's HTML one.
+      { headers: aiHeaders(), timeout: 90_000 }
     );
     return res
       .status(200)
       .json(new ApiResponse(200, aiResponse.data, "AI prediction completed."));
   } catch (error) {
-    logger.error({ err: error }, "AI /api/predict proxy error");
+    // Log status + upstream body so the operator can see *why* upstream failed
+    // (401 = secret mismatch, ECONNREFUSED = wrong URL, timeout = cold-start, ...).
+    logger.error(
+      {
+        err: error,
+        upstreamStatus: error?.response?.status,
+        upstreamBody: error?.response?.data,
+        code: error?.code,
+        aiUrl: AI_SERVICE_URL,
+      },
+      "AI /api/predict proxy error"
+    );
     throw new ApiError(
       502,
       upstreamErrorMessage(error, "AI prediction service is unavailable.")

@@ -25,16 +25,26 @@ app.use(
 app.use(helmet());
 
 // --- Rate limiting ---
-// General limiter: 100 requests per 15 min per IP
+// Sized for *real* dashboard usage. The bot polls AI for up to 9 symbols
+// every minute (~135 calls / 15 min just from that), useAiHealth adds 30
+// background pings, plus wallet refreshes and live prices for each portfolio
+// item. 100/15min — the old limit — would block a single logged-in user
+// within ~4 minutes of normal use. 600/15min ≈ 40 req/min, generous for
+// one user, still tight enough to throttle a runaway loop or scraper.
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 600,
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: "Too many requests. Please try again later." },
+  // Skip background polls — they're idempotent and cheap, no abuse vector.
+  skip: (req) =>
+    req.originalUrl === "/api/v1/ai/health" ||
+    req.originalUrl === "/healthz",
 });
 
-// Strict limiter for auth endpoints: 15 attempts per 15 min per IP
+// Strict limiter for auth endpoints: 15 attempts per 15 min per IP.
+// Tight because these are the brute-force surface.
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 15,
@@ -70,13 +80,15 @@ app.get("/healthz", (_req, res) => {
 });
 
 // --- Routes ---
-app.use("/api/v1/trades", generalLimiter, tradeRouter);
-app.use("/api/v1/users", userRouter);
-app.use("/api/v1/ai", generalLimiter, aiRouter);
-
-// Apply strict rate limit to auth-specific routes
+// /login and /register get the *strict* auth limiter (brute-force surface).
+// They're mounted FIRST so the stricter middleware wins for those paths;
+// every other /users route then falls through to the general limiter.
 app.use("/api/v1/users/login", authLimiter);
 app.use("/api/v1/users/register", authLimiter);
+
+app.use("/api/v1/trades", generalLimiter, tradeRouter);
+app.use("/api/v1/users", generalLimiter, userRouter);
+app.use("/api/v1/ai", generalLimiter, aiRouter);
 
 // --- Global Error Handling Middleware ---
 // eslint-disable-next-line no-unused-vars

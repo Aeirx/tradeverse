@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { apiClient } from "../api/client";
+import { callAiPredict } from "../api/ai";
 import { ALL_TARGETS } from "../constants/markets";
 
 const CYCLE_DELAY_MS = 60_000;          // wait between cycles (after one finishes)
@@ -126,7 +127,7 @@ export function useBot({
         if (cancelled) return;
         addLog(`> 🔍 Scanning ${symbol}...`);
         try {
-          const aiRes = await apiClient.post("/api/v1/ai/predict", { symbol, weights });
+          const aiRes = await callAiPredict({ symbol, weights, addLog });
           const payload = aiRes.data?.data || {};
           const signal = (payload.signal || "").toUpperCase();
           const confidence = payload.confidence ?? 0;

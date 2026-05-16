@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { apiClient } from "../api/client";
+import { callAiPredict } from "../api/ai";
 
 const formatErrorMessage = (err) =>
   err?.response?.data?.message ||
@@ -65,9 +66,10 @@ export function useAlgoExecution({
     );
     addLog(`> ⏳ Asking AI engine... (first call after a cold boot can take ~15s)`);
     try {
-      const response = await apiClient.post("/api/v1/ai/predict", {
+      const response = await callAiPredict({
         symbol: activeSymbol,
         weights,
+        addLog,
       });
       const payload = response.data?.data || {};
       const signal = (payload.signal || "").toUpperCase();
